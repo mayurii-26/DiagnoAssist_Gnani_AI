@@ -2,34 +2,63 @@
 
 import { useEffect, useState, useCallback } from "react";
 import { useAuth } from "@/components/AuthProvider";
+import { createClient } from "@/lib/supabase";
 import {
     getConsultationHistory,
+    getClinicalReports,
     type CompletedConsultation,
+    type ClinicalReport,
 } from "@/lib/consultationService";
+import ClinicalReportModal from "@/components/ClinicalReportModal";
 
 export default function PatientHistoryPage() {
     const { user } = useAuth();
     const [history, setHistory] = useState<CompletedConsultation[]>([]);
+    const [reports, setReports] = useState<ClinicalReport[]>([]);
     const [loading, setLoading] = useState(true);
     const [selectedConsultation, setSelectedConsultation] = useState<CompletedConsultation | null>(null);
+    const [activeReport, setActiveReport] = useState<ClinicalReport | null>(null);
+    const [activeDoctorName, setActiveDoctorName] = useState<string>("Doctor");
+    const [activePatientName, setActivePatientName] = useState<string>("Patient");
+    const [patientProfileName, setPatientProfileName] = useState<string>("Patient");
     const [copySuccess, setCopySuccess] = useState(false);
 
-    const loadHistory = useCallback(async () => {
+    const loadHistoryAndReports = useCallback(async () => {
         if (!user?.id) return;
         setLoading(true);
         try {
-            const data = await getConsultationHistory(user.id, "patient");
-            setHistory(data);
+            const supabase = createClient();
+            const { data: prof } = await supabase
+                .from("user_profiles")
+                .select("name")
+                .eq("id", user.id)
+                .maybeSingle();
+
+            const resolvedPatientName =
+                prof?.name ||
+                user.user_metadata?.full_name ||
+                user.user_metadata?.name ||
+                user.email?.split("@")[0] ||
+                "Patient";
+            setPatientProfileName(resolvedPatientName);
+
+            const [historyData, reportsData] = await Promise.all([
+                getConsultationHistory(user.id, "patient"),
+                getClinicalReports(user.id, "patient"),
+            ]);
+            setHistory(historyData);
+            // Patients only receive approved reports (filtered by backend or client)
+            setReports(reportsData.filter((r) => r.status === "approved"));
         } catch (err) {
-            console.error("Failed to load patient history:", err);
+            console.error("Failed to load patient history and reports:", err);
         } finally {
             setLoading(false);
         }
-    }, [user?.id]);
+    }, [user?.id, user?.user_metadata, user?.email]);
 
     useEffect(() => {
-        loadHistory();
-    }, [loadHistory]);
+        loadHistoryAndReports();
+    }, [loadHistoryAndReports]);
 
     const formatDuration = (secs: number) => {
         if (!secs || secs <= 0) return "< 1 min";
@@ -60,17 +89,25 @@ export default function PatientHistoryPage() {
         setTimeout(() => setCopySuccess(false), 2500);
     };
 
+    const getReportForItem = (item: CompletedConsultation): ClinicalReport | undefined => {
+        return reports.find(
+            (r) =>
+                (r.room_id && r.room_id === item.roomId) ||
+                (r.doctor_id === item.doctorId && r.patient_id === item.patientId)
+        );
+    };
+
     return (
         <div style={{ paddingBottom: "40px" }}>
             <div className="page-header" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                 <div>
                     <h1 style={{ fontSize: "1.75rem", fontWeight: 700, margin: 0 }}>Consultation History</h1>
                     <p style={{ color: "var(--d-text-muted)", marginTop: "4px" }}>
-                        Review past clinical consultations, durations, and saved dialogue transcripts
+                        Review past clinical encounters, approved medical summaries, diagnoses, and saved transcripts
                     </p>
                 </div>
                 <button
-                    onClick={loadHistory}
+                    onClick={loadHistoryAndReports}
                     style={{
                         padding: "8px 16px",
                         borderRadius: "var(--d-radius-sm)",
@@ -120,7 +157,7 @@ export default function PatientHistoryPage() {
                                 </svg>
                                 <h3 style={{ margin: "0 0 6px 0", fontSize: "1.1rem" }}>No Past Consultations Yet</h3>
                                 <p style={{ margin: 0, fontSize: "0.85rem" }}>
-                                    When you finish a live video consultation with a doctor, your session records and transcripts will be listed here.
+                                    When you finish a live video consultation with a doctor, your session records and doctor-approved clinical summaries will be listed here.
                                 </p>
                             </div>
                         ) : (
@@ -132,51 +169,99 @@ export default function PatientHistoryPage() {
                                             <th style={{ padding: "12px 18px", fontWeight: 600, color: "var(--d-text-muted)" }}>Physician</th>
                                             <th style={{ padding: "12px 18px", fontWeight: 600, color: "var(--d-text-muted)" }}>Consultation Reason</th>
                                             <th style={{ padding: "12px 18px", fontWeight: 600, color: "var(--d-text-muted)" }}>Duration</th>
-                                            <th style={{ padding: "12px 18px", fontWeight: 600, color: "var(--d-text-muted)" }}>Status</th>
+                                            <th style={{ padding: "12px 18px", fontWeight: 600, color: "var(--d-text-muted)" }}>Doctor Report</th>
                                             <th style={{ padding: "12px 18px", fontWeight: 600, color: "var(--d-text-muted)", textAlign: "right" }}>Actions</th>
                                         </tr>
                                     </thead>
                                     <tbody>
-                                        {history.map((item) => (
-                                            <tr key={item.id} style={{ borderBottom: "1px solid var(--d-border)" }}>
-                                                <td style={{ padding: "14px 18px", whiteSpace: "nowrap" }}>
-                                                    <strong>{formatDate(item.createdAt)}</strong>
-                                                </td>
-                                                <td style={{ padding: "14px 18px" }}>
-                                                    <span style={{ fontWeight: 600, color: "var(--d-primary)" }}>{item.doctorName}</span>
-                                                </td>
-                                                <td style={{ padding: "14px 18px", maxWidth: "260px" }}>
-                                                    <span style={{ display: "inline-block", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: "250px" }}>
-                                                        {item.reason || "General Medical Consultation"}
-                                                    </span>
-                                                </td>
-                                                <td style={{ padding: "14px 18px", whiteSpace: "nowrap" }}>
-                                                    {formatDuration(item.duration)}
-                                                </td>
-                                                <td style={{ padding: "14px 18px" }}>
-                                                    <span className="status-badge completed" style={{ fontSize: "0.75rem" }}>
-                                                        Completed
-                                                    </span>
-                                                </td>
-                                                <td style={{ padding: "14px 18px", textAlign: "right" }}>
-                                                    <button
-                                                        onClick={() => setSelectedConsultation(item)}
-                                                        style={{
-                                                            padding: "6px 14px",
-                                                            borderRadius: "var(--d-radius-sm)",
-                                                            border: "1px solid var(--d-primary)",
-                                                            background: "transparent",
-                                                            color: "var(--d-primary)",
-                                                            fontWeight: 600,
-                                                            cursor: "pointer",
-                                                            fontSize: "0.82rem",
-                                                        }}
-                                                    >
-                                                        View Transcript
-                                                    </button>
-                                                </td>
-                                            </tr>
-                                        ))}
+                                        {history.map((item) => {
+                                            const matchedReport = getReportForItem(item);
+
+                                            return (
+                                                <tr key={item.id} style={{ borderBottom: "1px solid var(--d-border)" }}>
+                                                    <td style={{ padding: "14px 18px", whiteSpace: "nowrap" }}>
+                                                        <strong>{formatDate(item.createdAt)}</strong>
+                                                    </td>
+                                                    <td style={{ padding: "14px 18px" }}>
+                                                        <span style={{ fontWeight: 600, color: "var(--d-primary)" }}>{item.doctorName}</span>
+                                                    </td>
+                                                    <td style={{ padding: "14px 18px", maxWidth: "240px" }}>
+                                                        <span style={{ display: "inline-block", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: "230px" }}>
+                                                            {item.reason || "General Medical Consultation"}
+                                                        </span>
+                                                    </td>
+                                                    <td style={{ padding: "14px 18px", whiteSpace: "nowrap" }}>
+                                                        {formatDuration(item.duration)}
+                                                    </td>
+                                                    <td style={{ padding: "14px 18px" }}>
+                                                        {matchedReport ? (
+                                                            <span
+                                                                style={{
+                                                                    fontSize: "0.75rem",
+                                                                    fontWeight: 700,
+                                                                    padding: "3px 8px",
+                                                                    borderRadius: "10px",
+                                                                    background: "#DCFCE7",
+                                                                    color: "#15803D",
+                                                                    border: "1px solid #86EFAC",
+                                                                }}
+                                                            >
+                                                                ✓ Approved EMR
+                                                            </span>
+                                                        ) : (
+                                                            <span
+                                                                style={{
+                                                                    fontSize: "0.75rem",
+                                                                    color: "var(--d-text-muted)",
+                                                                }}
+                                                            >
+                                                                In Review
+                                                            </span>
+                                                        )}
+                                                    </td>
+                                                    <td style={{ padding: "14px 18px", textAlign: "right" }}>
+                                                        <div style={{ display: "inline-flex", gap: "8px", alignItems: "center" }}>
+                                                            {matchedReport && (
+                                                                <button
+                                                                    onClick={() => {
+                                                                        setActiveDoctorName(item.doctorName || matchedReport.doctor_name || "Doctor");
+                                                                        setActivePatientName(item.patientName || matchedReport.patient_name || patientProfileName || "Patient");
+                                                                        setActiveReport(matchedReport);
+                                                                    }}
+                                                                    style={{
+                                                                        padding: "6px 12px",
+                                                                        borderRadius: "var(--d-radius-sm)",
+                                                                        border: "1px solid #16A34A",
+                                                                        background: "#F0FDF4",
+                                                                        color: "#166534",
+                                                                        fontWeight: 700,
+                                                                        cursor: "pointer",
+                                                                        fontSize: "0.82rem",
+                                                                    }}
+                                                                >
+                                                                    View Clinical Report
+                                                                </button>
+                                                            )}
+                                                            <button
+                                                                onClick={() => setSelectedConsultation(item)}
+                                                                style={{
+                                                                    padding: "6px 12px",
+                                                                    borderRadius: "var(--d-radius-sm)",
+                                                                    border: "1px solid var(--d-primary)",
+                                                                    background: "transparent",
+                                                                    color: "var(--d-primary)",
+                                                                    fontWeight: 600,
+                                                                    cursor: "pointer",
+                                                                    fontSize: "0.82rem",
+                                                                }}
+                                                            >
+                                                                Transcript
+                                                            </button>
+                                                        </div>
+                                                    </td>
+                                                </tr>
+                                            );
+                                        })}
                                     </tbody>
                                 </table>
                             </div>
@@ -184,6 +269,18 @@ export default function PatientHistoryPage() {
                     </div>
                 </div>
             </div>
+
+            {/* Approved Clinical Report Modal for Patient (Read-Only) */}
+            {activeReport && user?.id && (
+                <ClinicalReportModal
+                    report={activeReport}
+                    patientName={activePatientName || patientProfileName || "Patient"}
+                    doctorName={activeDoctorName || activeReport.doctor_name || "Doctor"}
+                    currentUserRole="patient"
+                    currentUserId={user.id}
+                    onClose={() => setActiveReport(null)}
+                />
+            )}
 
             {/* Transcript Modal Dialog */}
             {selectedConsultation && (
@@ -207,7 +304,7 @@ export default function PatientHistoryPage() {
                         style={{
                             background: "var(--d-surface, #FFFFFF)",
                             borderRadius: "var(--d-radius, 12px)",
-                            maxWidth: "680px",
+                            maxWidth: "700px",
                             width: "100%",
                             maxHeight: "85vh",
                             display: "flex",
@@ -229,7 +326,7 @@ export default function PatientHistoryPage() {
                         >
                             <div>
                                 <h3 style={{ margin: 0, fontSize: "1.2rem", fontWeight: 700 }}>
-                                    Consultation Transcript
+                                    Consultation Speech Transcript
                                 </h3>
                                 <p style={{ margin: "3px 0 0", color: "var(--d-text-muted)", fontSize: "0.82rem" }}>
                                     Physician: <strong>{selectedConsultation.doctorName}</strong> • {formatDate(selectedConsultation.createdAt)}
@@ -267,12 +364,12 @@ export default function PatientHistoryPage() {
                                 <strong>{formatDuration(selectedConsultation.duration)}</strong>
                             </div>
                             <div>
-                                <span style={{ color: "var(--d-text-muted)" }}>Room ID:</span>{" "}
-                                <code>{selectedConsultation.roomId}</code>
+                                <span style={{ color: "var(--d-text-muted)" }}>Physician:</span>{" "}
+                                <strong>{selectedConsultation.doctorName}</strong>
                             </div>
                             <div>
                                 <span style={{ color: "var(--d-text-muted)" }}>Reason:</span>{" "}
-                                <strong>{selectedConsultation.reason || "General consultation"}</strong>
+                                <strong>{selectedConsultation.reason || "General Medical Consultation"}</strong>
                             </div>
                         </div>
 
@@ -308,7 +405,7 @@ export default function PatientHistoryPage() {
                                 </div>
                             ) : (
                                 <p style={{ color: "var(--d-text-muted)", fontStyle: "italic", textAlign: "center", margin: "40px 0" }}>
-                                    No dialogue transcript was captured during this session.
+                                    No speech dialogue was recorded for this session.
                                 </p>
                             )}
                         </div>
@@ -338,7 +435,7 @@ export default function PatientHistoryPage() {
                                         color: copySuccess ? "#16A34A" : "var(--d-text)",
                                     }}
                                 >
-                                    {copySuccess ? "✓ Copied to Clipboard" : "Copy Transcript"}
+                                    {copySuccess ? "✓ Copied to Clipboard" : "Copy Dialogue Log"}
                                 </button>
                             ) : (
                                 <div />

@@ -1,0 +1,652 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Clinical Encounter Report - EMR-20261105-84728</title>
+    <style>
+        @page {
+            size: A4 portrait;
+            margin: 14mm 14mm 16mm 14mm;
+        }
+        * {
+            box-sizing: border-box;
+            -webkit-print-color-adjust: exact !important;
+            print-color-adjust: exact !important;
+        }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            color: #111827;
+            background: #FFFFFF;
+            margin: 0;
+            padding: 0;
+            font-size: 9.2pt;
+            line-height: 1.42;
+        }
+        .emr-container {
+            width: 100%;
+            max-width: 820px;
+            margin: 0 auto;
+            padding: 0;
+        }
+        .header-banner {
+            border-bottom: 2px solid #1E3A8A;
+            padding-bottom: 10px;
+            margin-bottom: 12px;
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+        }
+        .clinic-brand {
+            font-size: 13.5pt;
+            font-weight: 800;
+            color: #1E3A8A;
+            margin: 0;
+        }
+        .clinic-sub {
+            font-size: 8pt;
+            color: #4B5563;
+            margin: 2px 0 0;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        .doc-title {
+            font-size: 10.5pt;
+            font-weight: 700;
+            color: #1F2937;
+            margin-top: 4px;
+        }
+        .status-badge {
+            display: inline-block;
+            padding: 4px 10px;
+            border-radius: 4px;
+            font-size: 8pt;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            background: #DCFCE7;
+            color: #15803D;
+            border: 1px solid #86EFAC;
+            text-align: right;
+        }
+        .meta-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 10px;
+            background: #F9FAFB;
+            border: 1px solid #E5E7EB;
+            border-radius: 6px;
+            padding: 10px 14px;
+            margin-bottom: 12px;
+            font-size: 8.5pt;
+        }
+        .meta-col {
+            display: flex;
+            flex-direction: column;
+            gap: 3px;
+        }
+        .meta-row {
+            display: flex;
+        }
+        .meta-lbl {
+            width: 115px;
+            font-weight: 600;
+            color: #4B5563;
+        }
+        .meta-val {
+            font-weight: 600;
+            color: #111827;
+            flex: 1;
+        }
+        .section {
+            margin-bottom: 12px;
+            page-break-inside: avoid;
+            break-inside: avoid;
+        }
+        .section-heading {
+            font-size: 9.5pt;
+            font-weight: 700;
+            color: #1E3A8A;
+            text-transform: uppercase;
+            letter-spacing: 0.4px;
+            border-bottom: 1.5px solid #DBEAFE;
+            padding-bottom: 3px;
+            margin: 0 0 6px 0;
+            page-break-after: avoid;
+            break-after: avoid;
+        }
+        .section-content {
+            font-size: 9pt;
+            color: #1F2937;
+            line-height: 1.45;
+        }
+        .soap-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 8px;
+            margin-top: 4px;
+        }
+        .soap-card {
+            border: 1px solid #E5E7EB;
+            border-radius: 6px;
+            overflow: hidden;
+            background: #FFF;
+            page-break-inside: avoid;
+            break-inside: avoid;
+        }
+        .soap-title {
+            padding: 4px 8px;
+            font-size: 8pt;
+            font-weight: 700;
+            text-transform: uppercase;
+        }
+        .soap-body {
+            padding: 8px;
+            font-size: 8.8pt;
+            line-height: 1.4;
+        }
+        .table-custom {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 8.5pt;
+            margin-top: 4px;
+            page-break-inside: avoid;
+            break-inside: avoid;
+        }
+        .table-custom th {
+            background: #F3F4F6;
+            color: #374151;
+            font-weight: 700;
+            text-align: left;
+            padding: 6px 8px;
+            border-bottom: 1.5px solid #D1D5DB;
+        }
+        .vitals-grid {
+            display: grid;
+            grid-template-columns: repeat(5, 1fr);
+            gap: 6px;
+            margin-top: 6px;
+        }
+        .vital-box {
+            border: 1px solid #E5E7EB;
+            border-radius: 4px;
+            padding: 6px;
+            background: #F9FAFB;
+            text-align: center;
+        }
+        .vital-lbl {
+            font-size: 7.2pt;
+            font-weight: 700;
+            text-transform: uppercase;
+            color: #6B7280;
+            margin-bottom: 2px;
+        }
+        .vital-val {
+            font-size: 8.5pt;
+            font-weight: 700;
+            color: #111827;
+        }
+        .callout-warning {
+            background: #FEF2F2;
+            border: 1px solid #FCA5A5;
+            border-left: 4px solid #DC2626;
+            border-radius: 4px;
+            padding: 8px 12px;
+            color: #991B1B;
+            font-size: 8.5pt;
+            margin-top: 8px;
+            page-break-inside: avoid;
+            break-inside: avoid;
+        }
+        .signature-block {
+            margin-top: 16px;
+            padding-top: 10px;
+            border-top: 1.5px solid #E5E7EB;
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-end;
+            page-break-inside: avoid;
+            break-inside: avoid;
+        }
+        .sig-stamp {
+            border: 1.5px dashed #059669;
+            background: #F0FDF4;
+            color: #065F46;
+            padding: 8px 14px;
+            border-radius: 6px;
+            font-size: 8.2pt;
+            display: inline-block;
+        }
+        .footer-note {
+            margin-top: 14px;
+            padding-top: 8px;
+            border-top: 1px solid #E5E7EB;
+            font-size: 7.5pt;
+            color: #6B7280;
+            text-align: center;
+            line-height: 1.35;
+        }
+    </style>
+</head>
+<body>
+<div class="emr-container">
+    <!-- 1. DOCUMENT HEADER -->
+    <div class="header-banner">
+        <div>
+            <h1 class="clinic-brand">DiagnoAssist Telehealth & Hospital Clinical Services</h1>
+            <div class="clinic-sub">Accredited Telemedicine &amp; Longitudinal Clinical EMR Department</div>
+            <div class="doc-title">ELECTRONIC MEDICAL RECORD (EMR) — CLINICAL ENCOUNTER SUMMARY</div>
+        </div>
+        <div style="text-align: right;">
+            <div class="status-badge">APPROVED CLINICAL EMR</div>
+            <div style="font-size: 8pt; color: #6B7280; margin-top: 4px;">Doc ID: <strong>EMR-20261105-84728</strong></div>
+            <div style="font-size: 7.8pt; color: #6B7280;">Date: 2026-11-05T17:58:59.910663+00:00</div>
+        </div>
+    </div>
+
+    <!-- 2 & 3. PATIENT DEMOGRAPHICS & ENCOUNTER INFORMATION -->
+    <div class="meta-grid">
+        <div class="meta-col">
+            <div style="font-size: 7.8pt; font-weight: 700; text-transform: uppercase; color: #1E3A8A; margin-bottom: 2px;">
+                Patient Demographics
+            </div>
+            <div class="meta-row"><span class="meta-lbl">Full Name:</span><span class="meta-val">John Doe</span></div>
+            <div class="meta-row"><span class="meta-lbl">Patient ID / MRN:</span><span class="meta-val">MRN-8C8905EE</span></div>
+            <div class="meta-row"><span class="meta-lbl">Age / Sex:</span><span class="meta-val">34 Y / Male</span></div>
+            <div class="meta-row"><span class="meta-lbl">Encounter Session:</span><span class="meta-val">room_live_encounter_771</span></div>
+        </div>
+        <div class="meta-col">
+            <div style="font-size: 7.8pt; font-weight: 700; text-transform: uppercase; color: #1E3A8A; margin-bottom: 2px;">
+                Encounter Information
+            </div>
+            <div class="meta-row"><span class="meta-lbl">Attending Physician:</span><span class="meta-val">Dr. Sarah Jenkins, MD</span></div>
+            <div class="meta-row"><span class="meta-lbl">Specialization:</span><span class="meta-val">Telehealth Physician / General Medicine</span></div>
+            <div class="meta-row"><span class="meta-lbl">Encounter Type:</span><span class="meta-val">Synchronous Telehealth Audio/Video</span></div>
+            <div class="meta-row"><span class="meta-lbl">Session Duration:</span><span class="meta-val">12 minutes</span></div>
+        </div>
+    </div>
+
+    <!-- 4. CHIEF COMPLAINT -->
+    <div class="section">
+        <div class="section-heading">1. Chief Complaint</div>
+        <div class="section-content" style="font-weight: 600; color: #1E3A8A; font-size: 9.3pt;">
+            Headache, Fever, Nausea, Light sensitivity lasting 3 day
+        </div>
+    </div>
+
+    <!-- 5. HISTORY OF PRESENT ILLNESS (HPI) -->
+    <div class="section">
+        <div class="section-heading">2. History of Present Illness (HPI)</div>
+        <div class="section-content" style="text-align: justify;">
+            The patient is a participant presenting for a virtual consultation complaining of Headache, Fever, Nausea, Light sensitivity lasting 3 day. The onset was described as acute, progressing over the past 3 day. Pain is described as intense and throbbing in nature, aggravated by exposure to bright lighting and sensory stimulation. Associated symptoms include nausea, low-grade fever, and photophobia. Prior over-the-counter analgesia provided only minimal and transient relief.
+        </div>
+    </div>
+
+    <!-- 6. PAST MEDICAL, SURGICAL, MEDICATION & ALLERGY HISTORY -->
+    <div class="section">
+        <div class="section-heading">3. Past Medical, Surgical, Medication &amp; Allergy History</div>
+        <table class="table-custom">
+            <tbody>
+                <tr>
+                    <td style="width: 25%; font-weight: 600; padding: 4px 8px; border-bottom: 1px solid #E5E7EB; background: #F9FAFB;">Past Conditions</td>
+                    <td style="padding: 4px 8px; border-bottom: 1px solid #E5E7EB;">No significant chronic medical conditions reported during encounter</td>
+                </tr>
+                <tr>
+                    <td style="font-weight: 600; padding: 4px 8px; border-bottom: 1px solid #E5E7EB; background: #F9FAFB;">Surgical History</td>
+                    <td style="padding: 4px 8px; border-bottom: 1px solid #E5E7EB;">No prior surgical history documented</td>
+                </tr>
+                <tr>
+                    <td style="font-weight: 600; padding: 4px 8px; border-bottom: 1px solid #E5E7EB; background: #F9FAFB;">Current Medications</td>
+                    <td style="padding: 4px 8px; border-bottom: 1px solid #E5E7EB;">Paracetamol 500mg taken previously with minimal relief</td>
+                </tr>
+                <tr>
+                    <td style="font-weight: 600; padding: 4px 8px; border-bottom: 1px solid #E5E7EB; background: #F9FAFB; color: #991B1B;">Allergies</td>
+                    <td style="padding: 4px 8px; border-bottom: 1px solid #E5E7EB; font-weight: 600; color: #991B1B;">No known drug allergies (NKDA) reported by patient</td>
+                </tr>
+                <tr>
+                    <td style="font-weight: 600; padding: 4px 8px; border-bottom: 1px solid #E5E7EB; background: #F9FAFB;">Family History</td>
+                    <td style="padding: 4px 8px; border-bottom: 1px solid #E5E7EB;">Non-contributory / Not documented during encounter</td>
+                </tr>
+            </tbody>
+        </table>
+    </div>
+
+    <!-- 7. REVIEW OF SYSTEMS (ROS) -->
+    <div class="section">
+        <div class="section-heading">4. Review of Systems (ROS)</div>
+        <table class="table-custom">
+            <tbody>
+                <tr>
+            <td style="padding: 6px 10px; border-bottom: 1px solid #E5E7EB; font-weight: 600; width: 140px; color: #374151;">Constitutional</td>
+            <td style="padding: 6px 10px; border-bottom: 1px solid #E5E7EB; color: #1F2937;">Positive for mild fever and fatigue. Denies unintended weight loss or night sweats.</td>
+        </tr><tr>
+            <td style="padding: 6px 10px; border-bottom: 1px solid #E5E7EB; font-weight: 600; width: 140px; color: #374151;">Neurological</td>
+            <td style="padding: 6px 10px; border-bottom: 1px solid #E5E7EB; color: #1F2937;">Positive for severe throbbing headache (predominantly unilateral). Denies syncope, seizures, or limb weakness.</td>
+        </tr><tr>
+            <td style="padding: 6px 10px; border-bottom: 1px solid #E5E7EB; font-weight: 600; width: 140px; color: #374151;">HEENT</td>
+            <td style="padding: 6px 10px; border-bottom: 1px solid #E5E7EB; color: #1F2937;">Positive for marked photophobia (light sensitivity). Denies neck stiffness, visual obscuration, or acute ear discharge.</td>
+        </tr><tr>
+            <td style="padding: 6px 10px; border-bottom: 1px solid #E5E7EB; font-weight: 600; width: 140px; color: #374151;">Respiratory</td>
+            <td style="padding: 6px 10px; border-bottom: 1px solid #E5E7EB; color: #1F2937;">Denies shortness of breath, cough, hemoptysis, or wheezing.</td>
+        </tr><tr>
+            <td style="padding: 6px 10px; border-bottom: 1px solid #E5E7EB; font-weight: 600; width: 140px; color: #374151;">Cardiovascular</td>
+            <td style="padding: 6px 10px; border-bottom: 1px solid #E5E7EB; color: #1F2937;">Denies chest pain, chest tightness, palpitations, or lower extremity edema.</td>
+        </tr><tr>
+            <td style="padding: 6px 10px; border-bottom: 1px solid #E5E7EB; font-weight: 600; width: 140px; color: #374151;">Gastrointestinal</td>
+            <td style="padding: 6px 10px; border-bottom: 1px solid #E5E7EB; color: #1F2937;">Positive for nausea and occasional emesis. Denies acute abdominal pain, melena, or diarrhea.</td>
+        </tr><tr>
+            <td style="padding: 6px 10px; border-bottom: 1px solid #E5E7EB; font-weight: 600; width: 140px; color: #374151;">Musculoskeletal</td>
+            <td style="padding: 6px 10px; border-bottom: 1px solid #E5E7EB; color: #1F2937;">Denies localized joint swelling or diffuse muscle tenderness.</td>
+        </tr>
+            </tbody>
+        </table>
+    </div>
+
+    <!-- 8. VITAL SIGNS & OBSERVATIONS -->
+    <div class="section">
+        <div class="section-heading">5. Vital Signs &amp; Clinical Telehealth Observations</div>
+        <div class="vitals-grid">
+            <div class="vital-box">
+                <div class="vital-lbl">Blood Pressure</div>
+                <div class="vital-val">Not measured directly (Telehealth encounter)</div>
+            </div>
+            <div class="vital-box">
+                <div class="vital-lbl">Heart Rate</div>
+                <div class="vital-val">Not measured directly (Telehealth encounter)</div>
+            </div>
+            <div class="vital-box">
+                <div class="vital-lbl">Temperature</div>
+                <div class="vital-val">100.0 °F (Patient-reported mild fever)</div>
+            </div>
+            <div class="vital-box">
+                <div class="vital-lbl">Resp. Rate</div>
+                <div class="vital-val">16-18 breaths/min (Non-labored on video observation)</div>
+            </div>
+            <div class="vital-box">
+                <div class="vital-lbl">Oxygen (SpO2)</div>
+                <div class="vital-val">Not measured directly (Telehealth encounter)</div>
+            </div>
+        </div>
+        <div style="font-size: 8.5pt; color: #4B5563; margin-top: 5px;">
+            <strong>Telehealth Observations:</strong> Patient observed alert, attentive, and speaking in full sentences. Appears uncomfortable with bright room lighting.
+        </div>
+    </div>
+
+    <!-- 9. PHYSICAL EXAMINATION -->
+    <div class="section">
+        <div class="section-heading">6. Physical Examination</div>
+        <div class="section-content" style="background: #F9FAFB; padding: 6px 10px; border: 1px solid #E5E7EB; border-radius: 4px;">
+            Visual Telehealth Examination: Patient is alert, oriented x3, and communicative. No facial asymmetry or dysarthria noted on video observation. Pupils appear equally reactive to room light without gross ptosis. Normal respiratory pattern with no accessory muscle use. Hands-on neurological and tactile physical examination was not performed due to the virtual consultation format.
+        </div>
+    </div>
+
+    <!-- 10. CLINICAL ASSESSMENT & IMPRESSION -->
+    <div class="section">
+        <div class="section-heading">7. Clinical Assessment &amp; Working Impression</div>
+        <div class="section-content" style="font-weight: 500;">
+            Primary diagnostic impression: Acute Migraine. Symptom profile (Headache, Fever, Nausea, Light sensitivity) is consistent with discussion during encounter. Provisional assessment pending attending physician validation.
+        </div>
+    </div>
+
+    <!-- 11. SOAP CLINICAL DOCUMENTATION -->
+    <div class="section">
+        <div class="section-heading">8. Structured SOAP Documentation</div>
+        <div class="soap-grid">
+            <div class="soap-card">
+                <div class="soap-title" style="background: #EFF6FF; color: #1E40AF;">S — Subjective (Narrative &amp; Complaints)</div>
+                <div class="soap-body">Hello doctor. I have had an intense throbbing headache for the last 3 days. It is mostly on the left side of my forehead and temple. Yes, bright light hurts my eyes terribly, and I feel quite nauseous. I actually threw up once yesterday morning. Also, my temperature was around 100 degrees last night. I took Paracetamol 500mg yesterday afternoon, but it barely took the edge off for an hour or two. Understood, doctor. When should I follow up with you? Thank you very much, doctor.</div>
+            </div>
+            <div class="soap-card">
+                <div class="soap-title" style="background: #F3F4F6; color: #374151;">O — Objective (Observations &amp; Visual Exam)</div>
+                <div class="soap-body">Visual telehealth inspection: Patient observed alert, attentive, and speaking in full sentences. Appears uncomfortable with bright room lighting. Temperature: 100.0 °F (Patient-reported mild fever). Other vitals not measured directly.</div>
+            </div>
+            <div class="soap-card">
+                <div class="soap-title" style="background: #F5F3FF; color: #6D28D9;">A — Assessment (Clinical Synthesis)</div>
+                <div class="soap-body">Primary diagnostic impression: Acute Migraine. Symptom profile (Headache, Fever, Nausea, Light sensitivity) is consistent with discussion during encounter. Provisional assessment pending attending physician validation.</div>
+            </div>
+            <div class="soap-card">
+                <div class="soap-title" style="background: #F0FDF4; color: #166534;">P — Plan (Therapeutic &amp; Follow-up)</div>
+                <div class="soap-body">1. Prescribed/Recommended: Sumatriptan 50mg orally at onset of severe headache (max 200mg/24h), Ondansetron 4mg orally twice daily as needed for nausea, Paracetamol 500mg as needed for fever/pain relief. 2. Lifestyle & Supportive Care: Rest in dark environment, oral hydration, avoid triggers. 3. Follow-up: Follow up via teleconsultation in 3 to 5 days if symptoms persist or fail to improve. 4. Emergency Precautions: Emergency red flags reviewed.</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 12. EXTRACTED SYMPTOMS -->
+    <div class="section">
+        <div class="section-heading">9. Documented Symptoms Profile</div>
+        <table class="table-custom">
+            <thead>
+                <tr>
+                    <th style="width: 32%;">Symptom</th>
+                    <th style="width: 22%;">Duration</th>
+                    <th style="width: 18%;">Severity</th>
+                    <th style="width: 28%;">Context / Notes</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr>
+            <td style="padding: 7px 10px; border-bottom: 1px solid #E5E7EB; font-weight: 600;">1. Headache</td>
+            <td style="padding: 7px 10px; border-bottom: 1px solid #E5E7EB;">3 day</td>
+            <td style="padding: 7px 10px; border-bottom: 1px solid #E5E7EB;">
+                <span style="display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 8pt; font-weight: 600; background: #FEE2E2; color: #991B1B;">
+                    Severe
+                </span>
+            </td>
+            <td style="padding: 7px 10px; border-bottom: 1px solid #E5E7EB; color: #4B5563;">Identified in consultation dialogue</td>
+        </tr><tr>
+            <td style="padding: 7px 10px; border-bottom: 1px solid #E5E7EB; font-weight: 600;">2. Fever</td>
+            <td style="padding: 7px 10px; border-bottom: 1px solid #E5E7EB;">3 day</td>
+            <td style="padding: 7px 10px; border-bottom: 1px solid #E5E7EB;">
+                <span style="display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 8pt; font-weight: 600; background: #FEF3C7; color: #92400E;">
+                    High
+                </span>
+            </td>
+            <td style="padding: 7px 10px; border-bottom: 1px solid #E5E7EB; color: #4B5563;">Identified in consultation dialogue</td>
+        </tr><tr>
+            <td style="padding: 7px 10px; border-bottom: 1px solid #E5E7EB; font-weight: 600;">3. Nausea</td>
+            <td style="padding: 7px 10px; border-bottom: 1px solid #E5E7EB;">3 day</td>
+            <td style="padding: 7px 10px; border-bottom: 1px solid #E5E7EB;">
+                <span style="display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 8pt; font-weight: 600; background: #FEF3C7; color: #92400E;">
+                    Moderate
+                </span>
+            </td>
+            <td style="padding: 7px 10px; border-bottom: 1px solid #E5E7EB; color: #4B5563;">Identified in consultation dialogue</td>
+        </tr><tr>
+            <td style="padding: 7px 10px; border-bottom: 1px solid #E5E7EB; font-weight: 600;">4. Light sensitivity</td>
+            <td style="padding: 7px 10px; border-bottom: 1px solid #E5E7EB;">3 day</td>
+            <td style="padding: 7px 10px; border-bottom: 1px solid #E5E7EB;">
+                <span style="display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 8pt; font-weight: 600; background: #FEE2E2; color: #991B1B;">
+                    Severe
+                </span>
+            </td>
+            <td style="padding: 7px 10px; border-bottom: 1px solid #E5E7EB; color: #4B5563;">Identified in consultation dialogue</td>
+        </tr>
+            </tbody>
+        </table>
+    </div>
+
+    <!-- 13. DIFFERENTIAL DIAGNOSES -->
+    <div class="section">
+        <div class="section-heading">10. Differential Diagnoses &amp; Uncertainty Status</div>
+        <table class="table-custom">
+            <thead>
+                <tr>
+                    <th style="width: 32%;">Diagnosis</th>
+                    <th style="width: 26%;">Status / Uncertainty</th>
+                    <th style="width: 14%;">Confidence</th>
+                    <th style="width: 28%;">Supporting Evidence</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr>
+            <td style="padding: 7px 10px; border-bottom: 1px solid #E5E7EB; font-weight: 600;">1. Acute Migraine</td>
+            <td style="padding: 7px 10px; border-bottom: 1px solid #E5E7EB; color: #1E40AF; font-weight: 600;">Suspected / Working Impression</td>
+            <td style="padding: 7px 10px; border-bottom: 1px solid #E5E7EB;">High</td>
+            <td style="padding: 7px 10px; border-bottom: 1px solid #E5E7EB; color: #4B5563;">Patient discussed symptoms relating to 'migraine'</td>
+        </tr><tr>
+            <td style="padding: 7px 10px; border-bottom: 1px solid #E5E7EB; font-weight: 600;">2. Cephalea / Headache</td>
+            <td style="padding: 7px 10px; border-bottom: 1px solid #E5E7EB; color: #1E40AF; font-weight: 600;">Differential</td>
+            <td style="padding: 7px 10px; border-bottom: 1px solid #E5E7EB;">Moderate</td>
+            <td style="padding: 7px 10px; border-bottom: 1px solid #E5E7EB; color: #4B5563;">Patient discussed symptoms relating to 'headache'</td>
+        </tr><tr>
+            <td style="padding: 7px 10px; border-bottom: 1px solid #E5E7EB; font-weight: 600;">3. Pyrexia / Fever of undetermined origin</td>
+            <td style="padding: 7px 10px; border-bottom: 1px solid #E5E7EB; color: #1E40AF; font-weight: 600;">Differential</td>
+            <td style="padding: 7px 10px; border-bottom: 1px solid #E5E7EB;">Moderate</td>
+            <td style="padding: 7px 10px; border-bottom: 1px solid #E5E7EB; color: #4B5563;">Patient discussed symptoms relating to 'fever'</td>
+        </tr><tr>
+            <td style="padding: 7px 10px; border-bottom: 1px solid #E5E7EB; font-weight: 600;">4. Nausea and Vomiting</td>
+            <td style="padding: 7px 10px; border-bottom: 1px solid #E5E7EB; color: #1E40AF; font-weight: 600;">Differential</td>
+            <td style="padding: 7px 10px; border-bottom: 1px solid #E5E7EB;">Moderate</td>
+            <td style="padding: 7px 10px; border-bottom: 1px solid #E5E7EB; color: #4B5563;">Patient discussed symptoms relating to 'nausea'</td>
+        </tr>
+            </tbody>
+        </table>
+    </div>
+
+    <!-- 14. ICD-10 CLINICAL CODING MAPPING -->
+    <div class="section">
+        <div class="section-heading">11. ICD-10 Clinical Diagnostic Coding (WHO / MoHFW Standards)</div>
+        <table class="table-custom">
+            <thead>
+                <tr>
+                    <th style="width: 18%;">ICD-10 Code</th>
+                    <th style="width: 34%;">Official Description</th>
+                    <th style="width: 28%;">Transcript Evidence</th>
+                    <th style="width: 20%;">Coding Status</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr>
+            <td style="padding: 7px 10px; border-bottom: 1px solid #E5E7EB; font-family: monospace; font-size: 9pt; font-weight: 700; color: #1E3A8A;">G43.909</td>
+            <td style="padding: 7px 10px; border-bottom: 1px solid #E5E7EB; font-weight: 600;">Migraine, unspecified, not intractable, without status migrainosus</td>
+            <td style="padding: 7px 10px; border-bottom: 1px solid #E5E7EB; color: #4B5563;">Patient discussed symptoms relating to 'migraine'</td>
+            <td style="padding: 7px 10px; border-bottom: 1px solid #E5E7EB; font-size: 8pt; color: #047857; font-weight: 600;">Provisional (Awaiting Physician Confirmation)</td>
+        </tr><tr>
+            <td style="padding: 7px 10px; border-bottom: 1px solid #E5E7EB; font-family: monospace; font-size: 9pt; font-weight: 700; color: #1E3A8A;">R51.9</td>
+            <td style="padding: 7px 10px; border-bottom: 1px solid #E5E7EB; font-weight: 600;">Headache, unspecified</td>
+            <td style="padding: 7px 10px; border-bottom: 1px solid #E5E7EB; color: #4B5563;">Patient discussed symptoms relating to 'headache'</td>
+            <td style="padding: 7px 10px; border-bottom: 1px solid #E5E7EB; font-size: 8pt; color: #047857; font-weight: 600;">Provisional (Awaiting Physician Confirmation)</td>
+        </tr><tr>
+            <td style="padding: 7px 10px; border-bottom: 1px solid #E5E7EB; font-family: monospace; font-size: 9pt; font-weight: 700; color: #1E3A8A;">R50.9</td>
+            <td style="padding: 7px 10px; border-bottom: 1px solid #E5E7EB; font-weight: 600;">Fever, unspecified</td>
+            <td style="padding: 7px 10px; border-bottom: 1px solid #E5E7EB; color: #4B5563;">Patient discussed symptoms relating to 'fever'</td>
+            <td style="padding: 7px 10px; border-bottom: 1px solid #E5E7EB; font-size: 8pt; color: #047857; font-weight: 600;">Provisional (Awaiting Physician Confirmation)</td>
+        </tr><tr>
+            <td style="padding: 7px 10px; border-bottom: 1px solid #E5E7EB; font-family: monospace; font-size: 9pt; font-weight: 700; color: #1E3A8A;">R11.2</td>
+            <td style="padding: 7px 10px; border-bottom: 1px solid #E5E7EB; font-weight: 600;">Nausea with vomiting, unspecified</td>
+            <td style="padding: 7px 10px; border-bottom: 1px solid #E5E7EB; color: #4B5563;">Patient discussed symptoms relating to 'nausea'</td>
+            <td style="padding: 7px 10px; border-bottom: 1px solid #E5E7EB; font-size: 8pt; color: #047857; font-weight: 600;">Provisional (Awaiting Physician Confirmation)</td>
+        </tr>
+            </tbody>
+        </table>
+    </div>
+
+    <!-- 15. TREATMENT & MANAGEMENT PLAN -->
+    <div class="section">
+        <div class="section-heading">12. Treatment and Management Plan</div>
+        
+        <div style="font-weight: 700; color: #374151; font-size: 8.5pt; margin: 4px 0 2px 0;">Prescribed / Recommended Medications:</div>
+        <table class="table-custom">
+            <thead>
+                <tr>
+                    <th style="width: 26%;">Medication</th>
+                    <th style="width: 14%;">Dosage</th>
+                    <th style="width: 12%;">Route</th>
+                    <th style="width: 22%;">Frequency</th>
+                    <th style="width: 12%;">Duration</th>
+                    <th style="width: 14%;">Instructions</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr>
+            <td style="padding: 7px 10px; border-bottom: 1px solid #E5E7EB; font-weight: 600;">1. Sumatriptan</td>
+            <td style="padding: 7px 10px; border-bottom: 1px solid #E5E7EB;">50 mg</td>
+            <td style="padding: 7px 10px; border-bottom: 1px solid #E5E7EB;">Oral</td>
+            <td style="padding: 7px 10px; border-bottom: 1px solid #E5E7EB;">At onset of severe headache; may repeat once after 2 hours if pain recurs (max 200mg/day)</td>
+            <td style="padding: 7px 10px; border-bottom: 1px solid #E5E7EB;">As needed (PRN)</td>
+            <td style="padding: 7px 10px; border-bottom: 1px solid #E5E7EB; color: #4B5563;">Take with water at earliest sign of migraine attack</td>
+        </tr><tr>
+            <td style="padding: 7px 10px; border-bottom: 1px solid #E5E7EB; font-weight: 600;">2. Ondansetron</td>
+            <td style="padding: 7px 10px; border-bottom: 1px solid #E5E7EB;">4 mg</td>
+            <td style="padding: 7px 10px; border-bottom: 1px solid #E5E7EB;">Oral</td>
+            <td style="padding: 7px 10px; border-bottom: 1px solid #E5E7EB;">Twice daily as needed for nausea</td>
+            <td style="padding: 7px 10px; border-bottom: 1px solid #E5E7EB;">2 to 3 days</td>
+            <td style="padding: 7px 10px; border-bottom: 1px solid #E5E7EB; color: #4B5563;">Take 30 minutes before meals</td>
+        </tr><tr>
+            <td style="padding: 7px 10px; border-bottom: 1px solid #E5E7EB; font-weight: 600;">3. Paracetamol</td>
+            <td style="padding: 7px 10px; border-bottom: 1px solid #E5E7EB;">500 mg</td>
+            <td style="padding: 7px 10px; border-bottom: 1px solid #E5E7EB;">Oral</td>
+            <td style="padding: 7px 10px; border-bottom: 1px solid #E5E7EB;">Every 6-8 hours as needed for fever or mild pain (max 3g/24h)</td>
+            <td style="padding: 7px 10px; border-bottom: 1px solid #E5E7EB;">3 days</td>
+            <td style="padding: 7px 10px; border-bottom: 1px solid #E5E7EB; color: #4B5563;">Take after food with full glass of water</td>
+        </tr>
+            </tbody>
+        </table>
+
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 8px;">
+            <div>
+                <div style="font-weight: 700; color: #374151; font-size: 8.5pt; margin-bottom: 2px;">Laboratory &amp; Diagnostic Investigations:</div>
+                <ul style="margin: 0; padding-left: 16px; font-size: 8.5pt; color: #1F2937;">
+                    <li style='margin-bottom: 4px;'>Neuroimaging (CT / MRI Brain) if symptoms fail to resolve or red flags develop</li>
+                </ul>
+            </div>
+            <div>
+                <div style="font-weight: 700; color: #374151; font-size: 8.5pt; margin-bottom: 2px;">Lifestyle &amp; Non-Pharmacological Advice:</div>
+                <ul style="margin: 0; padding-left: 16px; font-size: 8.5pt; color: #1F2937;">
+                    <li style='margin-bottom: 4px;'>Rest in a quiet, dark, well-ventilated room during acute headache episodes</li><li style='margin-bottom: 4px;'>Maintain adequate oral hydration (2.5 to 3.0 liters of fluids daily)</li><li style='margin-bottom: 4px;'>Avoid bright screen glare, loud noises, and skipped meals</li><li style='margin-bottom: 4px;'>Maintain a headache and symptom trigger diary</li>
+                </ul>
+            </div>
+        </div>
+
+        <div style="margin-top: 6px; font-size: 8.8pt;">
+            <strong>Follow-Up Instructions:</strong> Follow up via teleconsultation in 3 to 5 days if symptoms persist or fail to improve.
+        </div>
+
+        <div class="callout-warning">
+            <strong>⚠️ Emergency Red-Flag Advice:</strong><br />
+            Seek emergency medical care immediately at the nearest hospital emergency room if you experience: sudden severe 'thunderclap' headache, high persistent fever (>102°F), neck stiffness, confusion, focal weakness, or visual loss.
+        </div>
+    </div>
+
+    <!-- 16. CONSULTATION OUTCOME & CLINICIAN NOTES -->
+    <div class="section">
+        <div class="section-heading">13. Consultation Outcome &amp; Clinician Remarks</div>
+        <div class="section-content">
+            <div><strong>Clinical Outcome:</strong> Encounter concluded. Patient counseled on conservative home care and prescribed medications. Clear follow-up interval and red-flag escalation criteria communicated.</div>
+            <div style="margin-top: 4px;"><strong>Attending Clinician Remarks:</strong> Patient engaged well during teleconsultation. Advised on medication compliance and prompt reporting of any emerging neurological red flags.</div>
+        </div>
+    </div>
+
+    <!-- 17. SOURCE TRANSCRIPT DISCLOSURE -->
+    <div class="section">
+        <div class="section-heading">14. Source Transcript Reference &amp; AI Telemedicine Disclosure</div>
+        <div style="font-size: 8pt; color: #4B5563; line-height: 1.35; background: #F3F4F6; padding: 6px 10px; border-radius: 4px;">
+            This clinical documentation was synthesized from verified 16 kHz audio transcription (Gnani AI STT). AI findings are provisional until explicitly reviewed, modified, and authenticated by the licensed attending physician.
+        </div>
+    </div>
+
+    <!-- 18. SIGNATURE & AUTHENTICATION -->
+    <div class="signature-block">
+        <div>
+            <div style="font-size: 8pt; color: #6B7280; text-transform: uppercase; font-weight: 700;">Attending Physician Authentication</div>
+            <div style="font-size: 10.5pt; font-weight: 700; color: #1E3A8A; margin-top: 2px;">Dr. Sarah Jenkins, MD</div>
+            <div style="font-size: 8pt; color: #4B5563;">Specialist in Telehealth &amp; Internal Medicine</div>
+            <div style="font-size: 7.8pt; color: #6B7280;">Reg / License: REG-TEL-MOHFW-94821</div>
+        </div>
+
+        <div style="text-align: right;">
+            <div class="sig-stamp">
+                <strong>✓ DIGITALLY AUTHENTICATED EMR</strong><br />
+                <span style="font-size: 7.6pt;">Signed: 2026-11-05T17:58:59.910663+00:00</span>
+            </div>
+            <div style="font-size: 7.5pt; color: #9CA3AF; margin-top: 3px;">Sign-off Verification: EMR-20261105-84728</div>
+        </div>
+    </div>
+
+    <!-- FOOTER -->
+    <div class="footer-note">
+        CONFIDENTIAL MEDICAL RECORD — FOR AUTHORIZED CLINICAL USE ONLY<br />
+        DiagnoAssist Clinical Encounter Management System • Document Accession: EMR-20261105-84728 • Generated: 2026-11-05T17:58:59.910663+00:00
+    </div>
+</div>
+</body>
+</html>

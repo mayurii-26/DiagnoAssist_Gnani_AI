@@ -11,8 +11,11 @@ import {
     subscribeToRoomSignaling,
     broadcastRoomSignal,
     saveConsultationTranscript,
+    generateClinicalReport,
     type RoomSignal,
+    type ClinicalReport,
 } from "@/lib/consultationService";
+import ClinicalReportModal from "@/components/ClinicalReportModal";
 
 export interface DialogueEntry {
     id: string;
@@ -150,6 +153,43 @@ export default function VideoPanel({
     const [showClosedCaptions, setShowClosedCaptions] = useState(true);
     const [currentSubtitle, setCurrentSubtitle] = useState<{ speaker: string; text: string } | null>(null);
     const [saveStatus, setSaveStatus] = useState<"idle" | "saving" | "saved" | "error">("idle");
+
+    // Phase 4: Post-call AI Clinical Report Generation & Review
+    const [activeClinicalReport, setActiveClinicalReport] = useState<ClinicalReport | null>(null);
+    const [isGeneratingReport, setIsGeneratingReport] = useState(false);
+    const [reportGenError, setReportGenError] = useState<string | null>(null);
+
+    const handleGeneratePostCallReport = async () => {
+        if (!roomId || !user?.id) return;
+        setIsGeneratingReport(true);
+        setReportGenError(null);
+        try {
+            const fullTranscript = dialogueTranscripts
+                .map((d) => `[${d.speaker}]: ${d.text}`)
+                .join("\n");
+            const docId = assignedDoctorId || (effectiveRole === "doctor" ? user.id : "");
+            const patId = assignedPatientId || (effectiveRole === "patient" ? user.id : "");
+
+            const res = await generateClinicalReport({
+                roomId: roomId,
+                doctorId: docId,
+                patientId: patId,
+                transcript: fullTranscript,
+                patientName: peerInfo?.name || "Patient",
+                doctorName: effectiveRole === "doctor" ? effectiveUserName : "Doctor",
+            });
+
+            if (res.success && res.report) {
+                setActiveClinicalReport(res.report);
+            } else {
+                setReportGenError(res.error || "Failed to generate report");
+            }
+        } catch (e: any) {
+            setReportGenError(e.message || "Error generating report");
+        } finally {
+            setIsGeneratingReport(false);
+        }
+    };
 
     // WebRTC Perfect Negotiation & DOM Refs
     const localVideoRef = useRef<HTMLVideoElement | null>(null);
@@ -923,25 +963,63 @@ export default function VideoPanel({
                     </div>
                 )}
 
-                <button
-                    onClick={() => {
-                        setRoomId(null);
-                        setConnectionStatus("idle");
-                        if (onCallEnd) onCallEnd();
-                    }}
-                    style={{
-                        padding: "10px 24px",
-                        borderRadius: "var(--d-radius-sm)",
-                        border: "none",
-                        background: "var(--d-primary)",
-                        color: "#FFF",
-                        fontWeight: 600,
-                        cursor: "pointer",
-                        fontSize: "0.9rem",
-                    }}
-                >
-                    Return to Directory
-                </button>
+                {reportGenError && (
+                    <div style={{ color: "#DC2626", fontSize: "0.85rem", marginBottom: "12px" }}>
+                        ⚠️ {reportGenError}
+                    </div>
+                )}
+
+                <div style={{ display: "flex", gap: "10px", justifyContent: "center", marginTop: "12px", flexWrap: "wrap" }}>
+                    {effectiveRole === "doctor" && (
+                        <button
+                            onClick={handleGeneratePostCallReport}
+                            disabled={isGeneratingReport}
+                            style={{
+                                padding: "10px 24px",
+                                borderRadius: "var(--d-radius-sm)",
+                                border: "none",
+                                background: isGeneratingReport ? "#9CA3AF" : "#2563EB",
+                                color: "#FFF",
+                                fontWeight: 700,
+                                cursor: isGeneratingReport ? "not-allowed" : "pointer",
+                                fontSize: "0.9rem",
+                                boxShadow: "0 2px 4px rgba(37,99,235,0.2)",
+                            }}
+                        >
+                            {isGeneratingReport ? "Analyzing Consultation..." : "⚡ Generate AI Clinical Report"}
+                        </button>
+                    )}
+                    <button
+                        onClick={() => {
+                            setRoomId(null);
+                            setConnectionStatus("idle");
+                            if (onCallEnd) onCallEnd();
+                        }}
+                        style={{
+                            padding: "10px 24px",
+                            borderRadius: "var(--d-radius-sm)",
+                            border: "1px solid var(--d-border)",
+                            background: "var(--d-surface-alt, #F8FAFC)",
+                            color: "var(--d-text)",
+                            fontWeight: 600,
+                            cursor: "pointer",
+                            fontSize: "0.9rem",
+                        }}
+                    >
+                        Return to Directory
+                    </button>
+                </div>
+
+                {activeClinicalReport && user?.id && (
+                    <ClinicalReportModal
+                        report={activeClinicalReport}
+                        patientName={effectiveRole === "doctor" ? (peerInfo?.name || "Patient") : effectiveUserName}
+                        doctorName={effectiveRole === "doctor" ? effectiveUserName : (peerInfo?.name || "Dr. Physician")}
+                        currentUserRole={effectiveRole}
+                        currentUserId={user.id}
+                        onClose={() => setActiveClinicalReport(null)}
+                    />
+                )}
             </div>
         );
     }

@@ -2,34 +2,65 @@
 
 import { useEffect, useState, useCallback } from "react";
 import { useAuth } from "@/components/AuthProvider";
+import { createClient } from "@/lib/supabase";
 import {
     getConsultationHistory,
+    getClinicalReports,
+    generateClinicalReport,
     type CompletedConsultation,
+    type ClinicalReport,
 } from "@/lib/consultationService";
+import ClinicalReportModal from "@/components/ClinicalReportModal";
 
 export default function DoctorHistoryPage() {
     const { user } = useAuth();
     const [history, setHistory] = useState<CompletedConsultation[]>([]);
+    const [reports, setReports] = useState<ClinicalReport[]>([]);
     const [loading, setLoading] = useState(true);
     const [selectedConsultation, setSelectedConsultation] = useState<CompletedConsultation | null>(null);
     const [copySuccess, setCopySuccess] = useState(false);
 
-    const loadHistory = useCallback(async () => {
+    // Phase 4: Clinical Report Modal state
+    const [activeReport, setActiveReport] = useState<ClinicalReport | null>(null);
+    const [reportPatientName, setReportPatientName] = useState<string>("Patient");
+    const [doctorProfileName, setDoctorProfileName] = useState<string>("Dr. Physician");
+    const [generatingId, setGeneratingId] = useState<string | null>(null);
+    const [genError, setGenError] = useState<string | null>(null);
+
+    const loadHistoryAndReports = useCallback(async () => {
         if (!user?.id) return;
         setLoading(true);
         try {
-            const data = await getConsultationHistory(user.id, "doctor");
-            setHistory(data);
+            const supabase = createClient();
+            const { data: prof } = await supabase
+                .from("user_profiles")
+                .select("name, specialization")
+                .eq("id", user.id)
+                .maybeSingle();
+
+            const resolvedDocName =
+                prof?.name ||
+                user.user_metadata?.full_name ||
+                user.user_metadata?.name ||
+                "Dr. Physician";
+            setDoctorProfileName(resolvedDocName);
+
+            const [historyData, reportsData] = await Promise.all([
+                getConsultationHistory(user.id, "doctor"),
+                getClinicalReports(user.id, "doctor"),
+            ]);
+            setHistory(historyData);
+            setReports(reportsData);
         } catch (err) {
-            console.error("Failed to load doctor history:", err);
+            console.error("Failed to load doctor history and clinical reports:", err);
         } finally {
             setLoading(false);
         }
-    }, [user?.id]);
+    }, [user?.id, user?.user_metadata]);
 
     useEffect(() => {
-        loadHistory();
-    }, [loadHistory]);
+        loadHistoryAndReports();
+    }, [loadHistoryAndReports]);
 
     const formatDuration = (secs: number) => {
         if (!secs || secs <= 0) return "< 1 min";
@@ -60,17 +91,69 @@ export default function DoctorHistoryPage() {
         setTimeout(() => setCopySuccess(false), 2500);
     };
 
+    // Find existing clinical report for a consultation item
+    const getReportForItem = (item: CompletedConsultation): ClinicalReport | undefined => {
+        return reports.find(
+            (r) =>
+                (r.room_id && r.room_id === item.roomId) ||
+                (r.patient_id === item.patientId && r.doctor_id === item.doctorId)
+        );
+    };
+
+    // Handle Generate AI Report
+    const handleGenerateReport = async (item: CompletedConsultation) => {
+        if (!user?.id) return;
+        setGeneratingId(item.id);
+        setGenError(null);
+
+        try {
+            const docName = doctorProfileName || user.user_metadata?.full_name || "Doctor";
+            const res = await generateClinicalReport({
+                transcriptId: item.transcriptId,
+                roomId: item.roomId,
+                doctorId: user.id,
+                patientId: item.patientId,
+                transcript: item.transcript,
+                patientName: item.patientName,
+                doctorName: docName,
+            });
+
+            if (res.success && res.report) {
+                // Add or update report in state
+                const enriched: ClinicalReport = {
+                    ...res.report,
+                    doctor_name: docName,
+                    patient_name: item.patientName,
+                };
+                setReports((prev) => [enriched, ...prev.filter((r) => r.id !== enriched.id)]);
+                setReportPatientName(item.patientName);
+                setActiveReport(enriched);
+            } else {
+                setGenError(res.error || "Failed to generate report from transcript");
+            }
+        } catch (e: any) {
+            setGenError(e.message || "Error generating report");
+        } finally {
+            setGeneratingId(null);
+        }
+    };
+
+    const handleOpenExistingReport = (report: ClinicalReport, patientName: string) => {
+        setReportPatientName(patientName || report.patient_name || "Patient");
+        setActiveReport(report);
+    };
+
     return (
         <div style={{ paddingBottom: "40px" }}>
             <div className="page-header" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                 <div>
                     <h1 style={{ fontSize: "1.75rem", fontWeight: 700, margin: 0 }}>Patient Consultation Records</h1>
                     <p style={{ color: "var(--d-text-muted)", marginTop: "4px" }}>
-                        Archived clinical encounters, dialogue transcripts, and session analytics
+                        Archived clinical encounters, dialogue transcripts, and AI-powered structured EMR documentation
                     </p>
                 </div>
                 <button
-                    onClick={loadHistory}
+                    onClick={loadHistoryAndReports}
                     style={{
                         padding: "8px 16px",
                         borderRadius: "var(--d-radius-sm)",
@@ -85,6 +168,30 @@ export default function DoctorHistoryPage() {
                 </button>
             </div>
 
+            {genError && (
+                <div
+                    style={{
+                        padding: "10px 16px",
+                        background: "#FEE2E2",
+                        color: "#991B1B",
+                        borderRadius: "8px",
+                        marginBottom: "16px",
+                        fontSize: "0.85rem",
+                        display: "flex",
+                        justifyContent: "space-between",
+                        alignItems: "center",
+                    }}
+                >
+                    <span>⚠️ {genError}</span>
+                    <button
+                        onClick={() => setGenError(null)}
+                        style={{ background: "none", border: "none", color: "#991B1B", cursor: "pointer", fontWeight: 700 }}
+                    >
+                        ✕
+                    </button>
+                </div>
+            )}
+
             <div className="dashboard-grid">
                 <div className="card full-width">
                     <div className="card-header">
@@ -98,19 +205,19 @@ export default function DoctorHistoryPage() {
                                 </svg>
                             </div>
                             <div>
-                                <div className="card-title">Completed Consultations Log</div>
+                                <div className="card-title">Completed Consultations &amp; Clinical EMR</div>
                                 <div className="card-subtitle">
                                     {history.length} {history.length === 1 ? "consultation" : "consultations"} documented
                                 </div>
                             </div>
                         </div>
-                        <span className="status-badge completed">Clinical EMR</span>
+                        <span className="status-badge completed">Verified EMR</span>
                     </div>
 
                     <div className="card-body" style={{ padding: 0 }}>
                         {loading ? (
                             <div style={{ padding: "40px", textAlign: "center", color: "var(--d-text-muted)" }}>
-                                Loading patient consultation history...
+                                Loading patient consultation history &amp; EMR records...
                             </div>
                         ) : history.length === 0 ? (
                             <div style={{ padding: "50px 20px", textAlign: "center", color: "var(--d-text-muted)" }}>
@@ -120,7 +227,7 @@ export default function DoctorHistoryPage() {
                                 </svg>
                                 <h3 style={{ margin: "0 0 6px 0", fontSize: "1.1rem" }}>No Completed Consultations Yet</h3>
                                 <p style={{ margin: 0, fontSize: "0.85rem" }}>
-                                    When you accept and finish consultations with patients, their session logs and transcripts will be stored here.
+                                    When you accept and finish consultations with patients, their session logs, transcripts, and AI reports will be stored here.
                                 </p>
                             </div>
                         ) : (
@@ -130,56 +237,147 @@ export default function DoctorHistoryPage() {
                                         <tr style={{ borderBottom: "1px solid var(--d-border)", background: "var(--d-surface-alt, #F8FAFC)" }}>
                                             <th style={{ padding: "12px 18px", fontWeight: 600, color: "var(--d-text-muted)" }}>Date &amp; Time</th>
                                             <th style={{ padding: "12px 18px", fontWeight: 600, color: "var(--d-text-muted)" }}>Patient Name</th>
-                                            <th style={{ padding: "12px 18px", fontWeight: 600, color: "var(--d-text-muted)" }}>Chief Complaint / Reason</th>
+                                            <th style={{ padding: "12px 18px", fontWeight: 600, color: "var(--d-text-muted)" }}>Reason</th>
                                             <th style={{ padding: "12px 18px", fontWeight: 600, color: "var(--d-text-muted)" }}>Duration</th>
-                                            <th style={{ padding: "12px 18px", fontWeight: 600, color: "var(--d-text-muted)" }}>Transcript Status</th>
+                                            <th style={{ padding: "12px 18px", fontWeight: 600, color: "var(--d-text-muted)" }}>EMR Report Status</th>
                                             <th style={{ padding: "12px 18px", fontWeight: 600, color: "var(--d-text-muted)", textAlign: "right" }}>Actions</th>
                                         </tr>
                                     </thead>
                                     <tbody>
-                                        {history.map((item) => (
-                                            <tr key={item.id} style={{ borderBottom: "1px solid var(--d-border)" }}>
-                                                <td style={{ padding: "14px 18px", whiteSpace: "nowrap" }}>
-                                                    <strong>{formatDate(item.createdAt)}</strong>
-                                                </td>
-                                                <td style={{ padding: "14px 18px" }}>
-                                                    <span style={{ fontWeight: 600, color: "var(--d-text)" }}>{item.patientName}</span>
-                                                </td>
-                                                <td style={{ padding: "14px 18px", maxWidth: "260px" }}>
-                                                    <span style={{ display: "inline-block", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: "250px" }}>
-                                                        {item.reason || "Clinical Consultation"}
-                                                    </span>
-                                                </td>
-                                                <td style={{ padding: "14px 18px", whiteSpace: "nowrap" }}>
-                                                    {formatDuration(item.duration)}
-                                                </td>
-                                                <td style={{ padding: "14px 18px" }}>
-                                                    <span
-                                                        className={`status-badge ${item.transcript ? "completed" : "reviewed"}`}
-                                                        style={{ fontSize: "0.75rem" }}
-                                                    >
-                                                        {item.transcript ? "Transcript Saved" : "No Audio Log"}
-                                                    </span>
-                                                </td>
-                                                <td style={{ padding: "14px 18px", textAlign: "right" }}>
-                                                    <button
-                                                        onClick={() => setSelectedConsultation(item)}
-                                                        style={{
-                                                            padding: "6px 14px",
-                                                            borderRadius: "var(--d-radius-sm)",
-                                                            border: "1px solid var(--d-primary)",
-                                                            background: "transparent",
-                                                            color: "var(--d-primary)",
-                                                            fontWeight: 600,
-                                                            cursor: "pointer",
-                                                            fontSize: "0.82rem",
-                                                        }}
-                                                    >
-                                                        Review Transcript
-                                                    </button>
-                                                </td>
-                                            </tr>
-                                        ))}
+                                        {history.map((item) => {
+                                            const matchedReport = getReportForItem(item);
+                                            const isGenerating = generatingId === item.id;
+
+                                            return (
+                                                <tr key={item.id} style={{ borderBottom: "1px solid var(--d-border)" }}>
+                                                    <td style={{ padding: "14px 18px", whiteSpace: "nowrap" }}>
+                                                        <strong>{formatDate(item.createdAt)}</strong>
+                                                    </td>
+                                                    <td style={{ padding: "14px 18px" }}>
+                                                        <span style={{ fontWeight: 600, color: "var(--d-text)" }}>{item.patientName}</span>
+                                                    </td>
+                                                    <td style={{ padding: "14px 18px", maxWidth: "220px" }}>
+                                                        <span style={{ display: "inline-block", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: "200px" }}>
+                                                            {item.reason || "Clinical Consultation"}
+                                                        </span>
+                                                    </td>
+                                                    <td style={{ padding: "14px 18px", whiteSpace: "nowrap" }}>
+                                                        {formatDuration(item.duration)}
+                                                    </td>
+                                                    <td style={{ padding: "14px 18px" }}>
+                                                        {matchedReport?.status === "approved" ? (
+                                                            <span
+                                                                style={{
+                                                                    fontSize: "0.75rem",
+                                                                    fontWeight: 700,
+                                                                    padding: "3px 8px",
+                                                                    borderRadius: "10px",
+                                                                    background: "#DCFCE7",
+                                                                    color: "#15803D",
+                                                                    border: "1px solid #86EFAC",
+                                                                }}
+                                                            >
+                                                                ✓ Approved EMR
+                                                            </span>
+                                                        ) : matchedReport?.status === "draft" ? (
+                                                            <span
+                                                                style={{
+                                                                    fontSize: "0.75rem",
+                                                                    fontWeight: 700,
+                                                                    padding: "3px 8px",
+                                                                    borderRadius: "10px",
+                                                                    background: "#FEF3C7",
+                                                                    color: "#B45309",
+                                                                    border: "1px solid #FDE68A",
+                                                                }}
+                                                            >
+                                                                ⚠ Draft Review
+                                                            </span>
+                                                        ) : item.transcript ? (
+                                                            <span
+                                                                style={{
+                                                                    fontSize: "0.75rem",
+                                                                    fontWeight: 600,
+                                                                    padding: "3px 8px",
+                                                                    borderRadius: "10px",
+                                                                    background: "#EFF6FF",
+                                                                    color: "#1E40AF",
+                                                                    border: "1px solid #BFDBFE",
+                                                                }}
+                                                            >
+                                                                Transcript Saved
+                                                            </span>
+                                                        ) : (
+                                                            <span
+                                                                style={{
+                                                                    fontSize: "0.75rem",
+                                                                    color: "var(--d-text-muted)",
+                                                                }}
+                                                            >
+                                                                No Speech Log
+                                                            </span>
+                                                        )}
+                                                    </td>
+                                                    <td style={{ padding: "14px 18px", textAlign: "right" }}>
+                                                        <div style={{ display: "inline-flex", gap: "8px", alignItems: "center" }}>
+                                                            {/* AI Clinical Report Action */}
+                                                            {matchedReport ? (
+                                                                <button
+                                                                    onClick={() => handleOpenExistingReport(matchedReport, item.patientName)}
+                                                                    style={{
+                                                                        padding: "6px 12px",
+                                                                        borderRadius: "var(--d-radius-sm)",
+                                                                        border: `1px solid ${matchedReport.status === "approved" ? "#16A34A" : "#D97706"}`,
+                                                                        background: matchedReport.status === "approved" ? "#F0FDF4" : "#FFFBEB",
+                                                                        color: matchedReport.status === "approved" ? "#166534" : "#B45309",
+                                                                        fontWeight: 700,
+                                                                        cursor: "pointer",
+                                                                        fontSize: "0.82rem",
+                                                                    }}
+                                                                >
+                                                                    {matchedReport.status === "approved" ? "View EMR Report" : "Review Draft"}
+                                                                </button>
+                                                            ) : item.transcript ? (
+                                                                <button
+                                                                    onClick={() => handleGenerateReport(item)}
+                                                                    disabled={isGenerating}
+                                                                    style={{
+                                                                        padding: "6px 12px",
+                                                                        borderRadius: "var(--d-radius-sm)",
+                                                                        border: "none",
+                                                                        background: isGenerating ? "#9CA3AF" : "#2563EB",
+                                                                        color: "#FFF",
+                                                                        fontWeight: 600,
+                                                                        cursor: isGenerating ? "not-allowed" : "pointer",
+                                                                        fontSize: "0.82rem",
+                                                                        boxShadow: "0 1px 2px rgba(37,99,235,0.2)",
+                                                                    }}
+                                                                >
+                                                                    {isGenerating ? "Analyzing..." : "⚡ Generate AI Report"}
+                                                                </button>
+                                                            ) : null}
+
+                                                            {/* Transcript button */}
+                                                            <button
+                                                                onClick={() => setSelectedConsultation(item)}
+                                                                style={{
+                                                                    padding: "6px 12px",
+                                                                    borderRadius: "var(--d-radius-sm)",
+                                                                    border: "1px solid var(--d-border)",
+                                                                    background: "transparent",
+                                                                    color: "var(--d-text)",
+                                                                    fontWeight: 600,
+                                                                    cursor: "pointer",
+                                                                    fontSize: "0.82rem",
+                                                                }}
+                                                            >
+                                                                Transcript
+                                                            </button>
+                                                        </div>
+                                                    </td>
+                                                </tr>
+                                            );
+                                        })}
                                     </tbody>
                                 </table>
                             </div>
@@ -187,6 +385,22 @@ export default function DoctorHistoryPage() {
                     </div>
                 </div>
             </div>
+
+            {/* Phase 4: Interactive Clinical Report Review & Sign-Off Modal */}
+            {activeReport && user?.id && (
+                <ClinicalReportModal
+                    report={activeReport}
+                    patientName={reportPatientName || activeReport.patient_name || "Patient"}
+                    doctorName={activeReport.doctor_name || doctorProfileName || user?.user_metadata?.full_name || "Dr. Physician"}
+                    currentUserRole="doctor"
+                    currentUserId={user.id}
+                    onClose={() => setActiveReport(null)}
+                    onReportApproved={(approved) => {
+                        // Update in state
+                        setReports((prev) => [approved, ...prev.filter((r) => r.id !== approved.id)]);
+                    }}
+                />
+            )}
 
             {/* Transcript Modal Dialog */}
             {selectedConsultation && (

@@ -1033,6 +1033,7 @@ export interface CompletedConsultation {
     reason: string;
     duration: number; // in seconds
     transcript: string;
+    transcriptId?: string;
     createdAt: string;
     status: string;
 }
@@ -1248,6 +1249,7 @@ export async function getConsultationHistory(
                 reason: unpacked.reason,
                 duration,
                 transcript: matchedTranscript?.transcript || "",
+                transcriptId: matchedTranscript?.id,
                 createdAt: call.created_at,
                 status: call.status || "ended",
             });
@@ -1267,6 +1269,7 @@ export async function getConsultationHistory(
                 reason: "Medical Consultation",
                 duration: t.duration || 0,
                 transcript: t.transcript || "",
+                transcriptId: t.id,
                 createdAt: t.created_at,
                 status: "ended",
             });
@@ -1274,4 +1277,308 @@ export async function getConsultationHistory(
     }
 
     return results;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 6. PHASE 4: AI CLINICAL DOCUMENTATION & STRUCTURED EMR
+// ─────────────────────────────────────────────────────────────────────────────
+
+export interface SOAPNotes {
+    subjective: string;
+    objective: string;
+    assessment: string;
+    plan: string;
+}
+
+export interface SymptomItem {
+    symptom: string;
+    name?: string;
+    duration?: string;
+    severity?: string;
+    status?: string;
+    notes?: string;
+}
+
+export interface DiagnosisItem {
+    diagnosis: string;
+    confidence?: string;
+    status?: string;
+    supporting_evidence?: string;
+    reasoning?: string;
+    is_differential?: boolean;
+}
+
+export interface ICD10CodeItem {
+    code: string;
+    description: string;
+    clinical_concept?: string;
+    evidence?: string;
+    supporting_evidence?: string;
+    coding_status?: string;
+}
+
+export interface StructuredMedication {
+    medication: string;
+    dosage?: string;
+    route?: string;
+    frequency?: string;
+    duration?: string;
+    instructions?: string;
+}
+
+export interface PastMedicalHistory {
+    past_conditions?: string[];
+    surgical_history?: string[];
+    current_medications?: string[];
+    allergies?: string[];
+    family_history?: string[];
+}
+
+export interface VitalSigns {
+    blood_pressure?: string;
+    heart_rate?: string;
+    temperature?: string;
+    respiratory_rate?: string;
+    spo2?: string;
+    observations?: string;
+}
+
+export interface TreatmentPlan {
+    medications?: string[];
+    medications_structured?: StructuredMedication[];
+    investigations?: string[];
+    recommendations?: string[];
+    follow_up?: string;
+    emergency_warnings?: string;
+    emergency_warning?: string;
+}
+
+export interface ClinicalReport {
+    id?: string;
+    patient_id: string;
+    doctor_id?: string;
+    doctor_name?: string;
+    patient_name?: string;
+    room_id?: string;
+    transcription_id?: string;
+    status: "draft" | "approved";
+    summary: string;
+    soap: SOAPNotes;
+    symptoms: SymptomItem[];
+    diagnosis_suggestions: DiagnosisItem[];
+    differential_diagnoses?: DiagnosisItem[];
+    icd_10_codes: ICD10CodeItem[];
+    treatment_plan: TreatmentPlan;
+    doctor_notes?: string;
+    approved_at?: string;
+    consultation_date?: string;
+    created_at?: string;
+    source?: string;
+    // Hospital-style EMR encounter fields
+    clinic_name?: string;
+    document_title?: string;
+    document_id?: string;
+    encounter_type?: string;
+    chief_complaint?: string;
+    history_of_present_illness?: string;
+    past_medical_history?: PastMedicalHistory;
+    review_of_systems?: Record<string, string>;
+    vital_signs?: VitalSigns;
+    physical_examination?: string;
+    assessment_and_impression?: string;
+    consultation_outcome?: string;
+    source_disclosure?: string;
+    patient_age?: string;
+    patient_sex?: string;
+    patient_mrn?: string;
+    patient_dob?: string;
+    doctor_specialization?: string;
+    doctor_reg_number?: string;
+    duration?: number;
+}
+
+/**
+ * Generate AI clinical documentation draft from consultation transcript.
+ */
+export async function generateClinicalReport(params: {
+    transcriptId?: string;
+    roomId?: string;
+    doctorId: string;
+    patientId: string;
+    transcript?: string;
+    patientName?: string;
+    doctorName?: string;
+}): Promise<{ success: boolean; report?: ClinicalReport; error?: string }> {
+    try {
+        const res = await fetch("http://localhost:8000/consultations/generate-report", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+                transcript_id: params.transcriptId,
+                room_id: params.roomId,
+                doctor_id: params.doctorId,
+                patient_id: params.patientId,
+                transcript: params.transcript,
+                patient_name: params.patientName || "Patient",
+                doctor_name: params.doctorName || "Doctor",
+            }),
+        });
+
+        if (!res.ok) {
+            const errData = await res.json().catch(() => ({ detail: "Failed to generate report" }));
+            return { success: false, error: errData.detail || "Server error generating report" };
+        }
+
+        const data = await res.json();
+        const rep = data.report || { ...data, status: "draft" };
+        return {
+            success: true,
+            report: rep,
+        };
+    } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : "Network error generating report";
+        return { success: false, error: msg };
+    }
+}
+
+/**
+ * Doctor approval and EMR sign-off for clinical report.
+ */
+export async function approveClinicalReport(payload: {
+    report_id?: string;
+    transcription_id?: string;
+    room_id?: string;
+    doctor_id: string;
+    patient_id: string;
+    doctor_name?: string;
+    patient_name?: string;
+    summary: string;
+    soap: SOAPNotes;
+    symptoms: SymptomItem[];
+    diagnosis_suggestions: DiagnosisItem[];
+    differential_diagnoses?: DiagnosisItem[];
+    icd_10_codes: ICD10CodeItem[];
+    treatment_plan: TreatmentPlan;
+    doctor_notes?: string;
+    chief_complaint?: string;
+    history_of_present_illness?: string;
+    past_medical_history?: PastMedicalHistory;
+    review_of_systems?: Record<string, string>;
+    vital_signs?: VitalSigns;
+    physical_examination?: string;
+    assessment_and_impression?: string;
+    consultation_outcome?: string;
+    source_disclosure?: string;
+    clinic_name?: string;
+    document_title?: string;
+    document_id?: string;
+    encounter_type?: string;
+}): Promise<{ success: boolean; reportId?: string; error?: string }> {
+    try {
+        const res = await fetch("http://localhost:8000/consultations/approve-report", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload),
+        });
+
+        if (!res.ok) {
+            const errData = await res.json().catch(() => ({ detail: "Failed to approve report" }));
+            return { success: false, error: errData.detail || "Server error approving report" };
+        }
+
+        const data = await res.json();
+        return { success: true, reportId: data.report_id };
+    } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : "Network error approving report";
+        return { success: false, error: msg };
+    }
+}
+
+/**
+ * Retrieve clinical reports from backend or Supabase client.
+ * Doctors see drafts + approved. Patients only see approved.
+ */
+export async function getClinicalReports(
+    userId: string,
+    role: "doctor" | "patient",
+    roomId?: string
+): Promise<ClinicalReport[]> {
+    try {
+        let url = `http://localhost:8000/consultations/reports?user_id=${userId}&role=${role}`;
+        if (roomId) {
+            url += `&room_id=${encodeURIComponent(roomId)}`;
+        }
+        const res = await fetch(url);
+        if (res.ok) {
+            const data = await res.json();
+            return data;
+        }
+    } catch (e) {
+        console.warn("Backend reports endpoint failed, falling back to Supabase client:", e);
+    }
+
+    // Direct Supabase fallback
+    const supabase = createClient();
+    try {
+        let query = supabase.from("patient_details").select("*");
+        if (role === "patient") {
+            query = query.eq("patient_id", userId);
+        }
+        query = query.order("created_at", { ascending: false });
+        const { data } = await query;
+        if (!data) return [];
+
+        const reports: ClinicalReport[] = [];
+        for (const row of data) {
+            const sd = (row.structured_diagnosis as any) || {};
+            const rowStatus = sd.status || (row as any).status || "approved";
+            const rowDoctorId = sd.doctor_id || (row as any).doctor_id;
+            const rowRoomId = sd.room_id || (row as any).room_id;
+
+            if (role === "doctor" && rowDoctorId && rowDoctorId !== userId) {
+                continue;
+            }
+            if (role === "patient" && rowStatus !== "approved") {
+                continue;
+            }
+            if (roomId && rowRoomId && rowRoomId !== roomId) {
+                continue;
+            }
+
+            reports.push({
+                id: row.id,
+                patient_id: row.patient_id,
+                doctor_id: rowDoctorId,
+                room_id: rowRoomId,
+                status: rowStatus,
+                summary: row.summary || sd.summary || "",
+                soap: sd.soap || { subjective: "", objective: "", assessment: "", plan: "" },
+                symptoms: sd.symptoms || [],
+                diagnosis_suggestions: sd.diagnosis_suggestions || [],
+                differential_diagnoses: sd.differential_diagnoses || [],
+                icd_10_codes: sd.icd_10_codes || [],
+                treatment_plan: sd.treatment_plan || {},
+                doctor_notes: sd.doctor_notes || "",
+                approved_at: sd.approved_at,
+                consultation_date: row.consultation_date,
+                created_at: row.created_at,
+                chief_complaint: sd.chief_complaint || "",
+                history_of_present_illness: sd.history_of_present_illness || "",
+                past_medical_history: sd.past_medical_history || {},
+                review_of_systems: sd.review_of_systems || {},
+                vital_signs: sd.vital_signs || {},
+                physical_examination: sd.physical_examination || "",
+                assessment_and_impression: sd.assessment_and_impression || "",
+                consultation_outcome: sd.consultation_outcome || "",
+                source_disclosure: sd.source_disclosure || "",
+                clinic_name: sd.clinic_name || "DiagnoAssist Telehealth & Hospital Clinical Services",
+                document_title: sd.document_title || "ELECTRONIC MEDICAL RECORD (EMR) — CLINICAL ENCOUNTER SUMMARY",
+                document_id: sd.document_id || `EMR-${rowRoomId || row.id}`,
+                encounter_type: sd.encounter_type || "Synchronous Telehealth Video Consultation",
+            });
+        }
+        return reports;
+    } catch {
+        return [];
+    }
 }
