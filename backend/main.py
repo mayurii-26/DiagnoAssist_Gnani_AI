@@ -1,28 +1,32 @@
 import os
+import asyncio
+import json
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, EmailStr
-from supabase import create_client, Client
-from google.cloud import speech
-import asyncio
-import json
-import queue
-import threading
+import websockets
+
+try:
+    from supabase import create_client, Client
+except ImportError:
+    create_client = None
+    Client = None
 
 load_dotenv()
-
-# Set Google Cloud credentials
-os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = r"C:\Users\Nikhi\OneDrive\Desktop\Cavista\cavista-488110-6647f4339dce.json"
 
 # ---------- Supabase client ----------
 SUPABASE_URL: str = os.getenv("SUPABASE_URL", "")
 SUPABASE_KEY: str = os.getenv("SUPABASE_SERVICE_KEY", "")
 
-supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+supabase = create_client(SUPABASE_URL, SUPABASE_KEY) if (create_client and SUPABASE_URL and SUPABASE_KEY) else None
 
-# ---------- Google Speech client ----------
-speech_client = speech.SpeechClient()
+# ---------- Gnani Prisma STT Configuration ----------
+GNANI_API_KEY: str = os.getenv("GNANI_API_KEY", "").strip()
+GNANI_STT_URL: str = os.getenv("GNANI_STT_URL", "wss://api.vachana.ai/stt/v3/stream").strip()
+GNANI_MODEL: str = os.getenv("GNANI_MODEL", "prisma-v3.0").strip()
+
+SUPPORTED_LANGUAGES = {"en-IN", "hi-IN", "mr-IN"}
 
 # ---------- FastAPI app ----------
 app = FastAPI(title="Mediq API", version="0.1.0")
@@ -58,6 +62,8 @@ def health_check():
 @app.post("/auth/login", response_model=LoginResponse)
 def login(payload: LoginRequest):
     """Authenticate a user via Supabase Auth."""
+    if not supabase:
+        raise HTTPException(status_code=500, detail="Supabase client not initialized or dependency missing.")
     try:
         response = supabase.auth.sign_in_with_password(
             {"email": payload.email, "password": payload.password}
@@ -83,73 +89,199 @@ def login(payload: LoginRequest):
 
 
 @app.websocket("/ws/transcribe")
-async def transcribe_audio(websocket: WebSocket):
+async def transcribe_audio(websocket: WebSocket, lang: str = "en-IN"):
+    """
+    WebSocket endpoint for real-time speech-to-text.
+    Proxies 16kHz PCM audio stream from frontend to Gnani AI Prisma STT.
+    Supports languages: en-IN, hi-IN, mr-IN.
+    """
     await websocket.accept()
-    print("WebSocket connected")
+    print(f"WebSocket client connected with language: {lang}")
 
-    config = speech.RecognitionConfig(
-        encoding=speech.RecognitionConfig.AudioEncoding.LINEAR16,
-        sample_rate_hertz=16000,
-        language_code="en-US",
-        enable_automatic_punctuation=True,
-    )
+    selected_lang = lang if lang in SUPPORTED_LANGUAGES else "en-IN"
 
-    streaming_config = speech.StreamingRecognitionConfig(
-        config=config,
-        interim_results=True,
-    )
+    if not GNANI_API_KEY:
+        print("Error: GNANI_API_KEY is not configured")
+        await websocket.send_json({
+            "type": "error",
+            "message": "GNANI_API_KEY is not configured in backend/.env"
+        })
+        await websocket.close(code=1008)
+        return
 
-    audio_queue = queue.Queue()
-    loop = asyncio.get_event_loop()
-
-    def request_generator():
-        while True:
-            chunk = audio_queue.get()
-            if chunk is None:
-                break
-            yield speech.StreamingRecognizeRequest(audio_content=chunk)
-
-    def recognize():
-        complete_transcript = ""
-        try:
-            responses = speech_client.streaming_recognize(
-                streaming_config,
-                request_generator(),
-            )
-
-            for response in responses:
-                print("GOT RESPONSE FROM GOOGLE")
-                for result in response.results:
-                    transcript = result.alternatives[0].transcript
-                    is_final = result.is_final
-                    
-                    if is_final:
-                        print(f"SPEECH: {transcript}")
-                        complete_transcript += " " + transcript
-                    else:
-                        print(f"LISTENING: {transcript}")
-        except Exception as e:
-            print(f"Speech processing error: {e}")
-        finally:
-            # Send complete transcript when stream ends
-            if complete_transcript.strip():
-                asyncio.run_coroutine_threadsafe(
-                    websocket.send_json({
-                        "transcript": complete_transcript.strip(),
-                        "is_final": True,
-                        "complete": True
-                    }),
-                    loop
-                )
-
-    threading.Thread(target=recognize, daemon=True).start()
+    headers = {
+        "x-api-key-id": GNANI_API_KEY,
+        "language_code": selected_lang,
+        "model": GNANI_MODEL,
+    }
 
     try:
-        while True:
-            data = await websocket.receive_bytes()
-            print(f"Received audio chunk: {len(data)} bytes")
-            audio_queue.put(data)
+        async with websockets.connect(GNANI_STT_URL, additional_headers=headers) as gnani_ws:
+            # Await initial confirmation from Gnani VAD/STT server
+            try:
+                init_raw = await asyncio.wait_for(gnani_ws.recv(), timeout=8.0)
+                init_msg = json.loads(init_raw)
+                print(f"Gnani service connected successfully (type: {init_msg.get('type')})")
+                await websocket.send_json({
+                    "type": "connected",
+                    "language": selected_lang,
+                    "message": "Connected to Gnani STT service",
+                    "status": "ready"
+                })
+            except Exception as e:
+                print(f"Failed to receive Gnani handshake: {e}")
+                await websocket.send_json({
+                    "type": "error",
+                    "message": "Failed to initialize Gnani STT stream."
+                })
+                await websocket.close(code=1011)
+                return
 
-    except WebSocketDisconnect:
-        print("WebSocket disconnected")
-        audio_queue.put(None)
+            accumulated_transcripts: list[str] = []
+            stop_requested = asyncio.Event()
+
+            async def forward_frontend_to_gnani():
+                """Reads PCM audio or control frames from frontend and forwards to Gnani."""
+                try:
+                    while not stop_requested.is_set():
+                        message = await websocket.receive()
+                        if "bytes" in message and message["bytes"]:
+                            data = message["bytes"]
+                            # Forward raw PCM binary chunk directly to Gnani
+                            await gnani_ws.send(data)
+                        elif "text" in message and message["text"]:
+                            try:
+                                control = json.loads(message["text"])
+                                if control.get("action") == "stop":
+                                    print("Received stop action from frontend")
+                                    # Send ~800ms of trailing silence to trigger Gnani VAD segment completion
+                                    silence = b"\x00" * 1024
+                                    for _ in range(25):
+                                        await gnani_ws.send(silence)
+                                        await asyncio.sleep(0.032)
+                                    stop_requested.set()
+                                    break
+                            except json.JSONDecodeError:
+                                pass
+                except WebSocketDisconnect:
+                    print("Frontend WebSocket disconnected")
+                    stop_requested.set()
+                except Exception as e:
+                    print(f"Error forwarding audio to Gnani: {e}")
+                    stop_requested.set()
+
+            async def forward_gnani_to_frontend():
+                """Reads transcription and status events from Gnani and forwards to frontend."""
+                try:
+                    while not stop_requested.is_set():
+                        try:
+                            gnani_raw = await asyncio.wait_for(gnani_ws.recv(), timeout=0.5)
+                        except asyncio.TimeoutError:
+                            continue
+
+                        data = json.loads(gnani_raw)
+                        event_type = data.get("type")
+
+                        if event_type == "speech_start":
+                            await websocket.send_json({
+                                "type": "speech_start",
+                                "message": "Speech detected..."
+                            })
+
+                        elif event_type == "processing":
+                            await websocket.send_json({
+                                "type": "processing",
+                                "message": "Processing..."
+                            })
+
+                        elif event_type == "transcript":
+                            segment_text = data.get("text", "").strip()
+                            if segment_text:
+                                accumulated_transcripts.append(segment_text)
+                                print(f"Gnani transcript [{selected_lang}]: {segment_text}")
+                                await websocket.send_json({
+                                    "type": "transcript",
+                                    "transcript": segment_text,
+                                    "is_final": True,
+                                    "language": data.get("detected_language_code", selected_lang)
+                                })
+
+                        elif event_type == "error":
+                            err_msg = data.get("message", "Gnani STT error")
+                            print(f"Gnani error: {err_msg}")
+                            await websocket.send_json({
+                                "type": "error",
+                                "message": err_msg
+                            })
+
+                except Exception as e:
+                    if not stop_requested.is_set():
+                        print(f"Error reading from Gnani: {e}")
+
+            # Run forwarders concurrently
+            sender_task = asyncio.create_task(forward_frontend_to_gnani())
+            receiver_task = asyncio.create_task(forward_gnani_to_frontend())
+
+            await sender_task
+
+            # Grace period to collect in-flight final segment from Gnani
+            try:
+                drain_deadline = asyncio.get_event_loop().time() + 2.5
+                while asyncio.get_event_loop().time() < drain_deadline:
+                    remaining = drain_deadline - asyncio.get_event_loop().time()
+                    if remaining <= 0:
+                        break
+                    try:
+                        gnani_raw = await asyncio.wait_for(gnani_ws.recv(), timeout=min(remaining, 1.0))
+                        data = json.loads(gnani_raw)
+                        if data.get("type") == "transcript":
+                            segment_text = data.get("text", "").strip()
+                            if segment_text:
+                                accumulated_transcripts.append(segment_text)
+                                await websocket.send_json({
+                                    "type": "transcript",
+                                    "transcript": segment_text,
+                                    "is_final": True
+                                })
+                                break
+                    except asyncio.TimeoutError:
+                        continue
+            except Exception:
+                pass
+
+            stop_requested.set()
+            receiver_task.cancel()
+
+            # Send complete accumulated transcript
+            final_text = " ".join(accumulated_transcripts).strip()
+            try:
+                await websocket.send_json({
+                    "type": "complete",
+                    "complete": True,
+                    "transcript": final_text,
+                    "is_final": True
+                })
+            except Exception:
+                pass
+
+    except websockets.exceptions.InvalidStatus as e:
+        print(f"Gnani authentication / connection error: {e}")
+        try:
+            await websocket.send_json({
+                "type": "error",
+                "message": f"Gnani authentication error: {e}"
+            })
+            await websocket.close(code=1008)
+        except Exception:
+            pass
+
+    except Exception as e:
+        print(f"Gnani STT session error: {e}")
+        try:
+            await websocket.send_json({
+                "type": "error",
+                "message": f"STT session error: {str(e)}"
+            })
+            await websocket.close(code=1011)
+        except Exception:
+            pass
