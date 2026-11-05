@@ -1,6 +1,14 @@
 "use client";
 
+import { useRouter } from "next/navigation";
+import { useAuth } from "@/components/AuthProvider";
+
 export default function ConsultationPage() {
+    const router = useRouter();
+    const { user } = useAuth();
+    const isDoctor = user?.user_metadata?.role === "doctor";
+    const targetRoute = isDoctor ? "/doctor/consultation" : "/patient/consultation";
+
     return (
         <>
             <div className="page-header">
@@ -15,6 +23,7 @@ export default function ConsultationPage() {
                     transition: 'all 0.3s ease',
                     overflow: 'hidden'
                 }}
+                onClick={() => router.push(targetRoute)}
                 onMouseEnter={(e) => {
                     e.currentTarget.style.transform = 'translateY(-4px)';
                     e.currentTarget.style.boxShadow = 'var(--d-shadow-lg)';
@@ -50,28 +59,33 @@ export default function ConsultationPage() {
                         </p>
                     </div>
                     <div style={{ padding: '20px' }}>
-                        <button style={{
-                            width: '100%',
-                            padding: '12px 20px',
-                            border: 'none',
-                            borderRadius: 'var(--d-radius-sm)',
-                            background: 'linear-gradient(135deg, var(--d-primary), #14B8A6)',
-                            color: 'white',
-                            fontFamily: 'var(--font)',
-                            fontSize: '0.9rem',
-                            fontWeight: '600',
-                            cursor: 'pointer',
-                            transition: 'all 0.2s'
-                        }}
-                        onMouseEnter={(e) => {
-                            e.currentTarget.style.transform = 'scale(1.02)';
-                            e.currentTarget.style.boxShadow = '0 4px 16px rgba(15, 123, 138, 0.35)';
-                        }}
-                        onMouseLeave={(e) => {
-                            e.currentTarget.style.transform = 'scale(1)';
-                            e.currentTarget.style.boxShadow = 'none';
-                        }}>
-                            Start Video Call
+                        <button 
+                            onClick={(e) => {
+                                e.stopPropagation();
+                                router.push(targetRoute);
+                            }}
+                            style={{
+                                width: '100%',
+                                padding: '12px 20px',
+                                border: 'none',
+                                borderRadius: 'var(--d-radius-sm)',
+                                background: 'linear-gradient(135deg, var(--d-primary), #14B8A6)',
+                                color: 'white',
+                                fontFamily: 'var(--font)',
+                                fontSize: '0.9rem',
+                                fontWeight: '600',
+                                cursor: 'pointer',
+                                transition: 'all 0.2s'
+                            }}
+                            onMouseEnter={(e) => {
+                                e.currentTarget.style.transform = 'scale(1.02)';
+                                e.currentTarget.style.boxShadow = '0 4px 16px rgba(15, 123, 138, 0.35)';
+                            }}
+                            onMouseLeave={(e) => {
+                                e.currentTarget.style.transform = 'scale(1)';
+                                e.currentTarget.style.boxShadow = 'none';
+                            }}>
+                            {isDoctor ? "Open Consultation Hub" : "Select Doctor & Request Call"}
                         </button>
                     </div>
                 </div>
@@ -82,6 +96,7 @@ export default function ConsultationPage() {
                     transition: 'all 0.3s ease',
                     overflow: 'hidden'
                 }}
+                onClick={() => router.push(targetRoute)}
                 onMouseEnter={(e) => {
                     e.currentTarget.style.transform = 'translateY(-4px)';
                     e.currentTarget.style.boxShadow = 'var(--d-shadow-lg)';
@@ -116,28 +131,33 @@ export default function ConsultationPage() {
                         </p>
                     </div>
                     <div style={{ padding: '20px' }}>
-                        <button style={{
-                            width: '100%',
-                            padding: '12px 20px',
-                            border: 'none',
-                            borderRadius: 'var(--d-radius-sm)',
-                            background: 'linear-gradient(135deg, var(--d-accent), #3B82F6)',
-                            color: 'white',
-                            fontFamily: 'var(--font)',
-                            fontSize: '0.9rem',
-                            fontWeight: '600',
-                            cursor: 'pointer',
-                            transition: 'all 0.2s'
-                        }}
-                        onMouseEnter={(e) => {
-                            e.currentTarget.style.transform = 'scale(1.02)';
-                            e.currentTarget.style.boxShadow = '0 4px 16px rgba(37, 99, 235, 0.35)';
-                        }}
-                        onMouseLeave={(e) => {
-                            e.currentTarget.style.transform = 'scale(1)';
-                            e.currentTarget.style.boxShadow = 'none';
-                        }}>
-                            Start Live Chat
+                        <button 
+                            onClick={(e) => {
+                                e.stopPropagation();
+                                router.push(targetRoute);
+                            }}
+                            style={{
+                                width: '100%',
+                                padding: '12px 20px',
+                                border: 'none',
+                                borderRadius: 'var(--d-radius-sm)',
+                                background: 'linear-gradient(135deg, var(--d-accent), #3B82F6)',
+                                color: 'white',
+                                fontFamily: 'var(--font)',
+                                fontSize: '0.9rem',
+                                fontWeight: '600',
+                                cursor: 'pointer',
+                                transition: 'all 0.2s'
+                            }}
+                            onMouseEnter={(e) => {
+                                e.currentTarget.style.transform = 'scale(1.02)';
+                                e.currentTarget.style.boxShadow = '0 4px 16px rgba(14, 165, 233, 0.35)';
+                            }}
+                            onMouseLeave={(e) => {
+                                e.currentTarget.style.transform = 'scale(1)';
+                                e.currentTarget.style.boxShadow = 'none';
+                            }}>
+                            {isDoctor ? "Enter Consultation Workspace" : "Start Live Consultation"}
                         </button>
                     </div>
                 </div>

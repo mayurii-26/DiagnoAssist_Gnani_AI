@@ -1,6 +1,13 @@
 "use client";
 
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useCallback } from "react";
+import { useAuth } from "@/components/AuthProvider";
+import {
+    broadcastRoomSignal,
+    subscribeToRoomSignaling,
+    saveConsultationTranscript,
+    type RoomSignal,
+} from "@/lib/consultationService";
 
 type Language = "en-IN" | "hi-IN" | "mr-IN";
 
@@ -10,12 +17,41 @@ const LANGUAGES: { code: Language; label: string; native: string }[] = [
     { code: "mr-IN", label: "Marathi", native: "मराठी (IN)" },
 ];
 
-export default function VoicePanel() {
+export interface VoiceDialogueLine {
+    id: string;
+    speaker: string;
+    role: "doctor" | "patient" | "system";
+    text: string;
+    time: string;
+}
+
+interface VoicePanelProps {
+    roomId?: string;
+    currentUserRole?: "doctor" | "patient";
+    currentUserName?: string;
+    doctorId?: string;
+    patientId?: string;
+    onTranscriptUpdate?: (fullTranscript: string) => void;
+}
+
+export default function VoicePanel({
+    roomId,
+    currentUserRole,
+    currentUserName,
+    doctorId,
+    patientId,
+    onTranscriptUpdate,
+}: VoicePanelProps) {
+    const { user } = useAuth();
+    const effectiveRole = currentUserRole || (user?.user_metadata?.role as "doctor" | "patient") || "doctor";
+    const effectiveName =
+        currentUserName || user?.user_metadata?.full_name || (effectiveRole === "doctor" ? "Doctor" : "Patient");
+
     const [isRecording, setIsRecording] = useState(false);
     const [isProcessing, setIsProcessing] = useState(false);
     const [language, setLanguage] = useState<Language>("en-IN");
     const [recordingTime, setRecordingTime] = useState(0);
-    const [transcript, setTranscript] = useState("");
+    const [dialogue, setDialogue] = useState<VoiceDialogueLine[]>([]);
     const [interimTranscript, setInterimTranscript] = useState("");
     const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
@@ -27,8 +63,21 @@ export default function VoicePanel() {
     } | null>(null);
     const websocketRef = useRef<WebSocket | null>(null);
     const timerRef = useRef<NodeJS.Timeout | null>(null);
+    const dialogueRef = useRef<VoiceDialogueLine[]>([]);
+    const signalingSubRef = useRef<{ unsubscribe: () => void; channel: any } | null>(null);
+
     const bars = Array.from({ length: 40 }, (_, i) => i);
 
+    // Keep dialogueRef synchronized
+    useEffect(() => {
+        dialogueRef.current = dialogue;
+        if (onTranscriptUpdate && dialogue.length > 0) {
+            const compiled = dialogue.map((d) => `[${d.speaker}]: ${d.text}`).join("\n");
+            onTranscriptUpdate(compiled);
+        }
+    }, [dialogue, onTranscriptUpdate]);
+
+    // Timer for recording duration
     useEffect(() => {
         if (isRecording) {
             timerRef.current = setInterval(() => {
@@ -44,6 +93,7 @@ export default function VoicePanel() {
         };
     }, [isRecording]);
 
+    // Format seconds to MM:SS
     const formatTime = (seconds: number) => {
         const mins = Math.floor(seconds / 60);
         const secs = seconds % 60;
@@ -55,44 +105,109 @@ export default function VoicePanel() {
         return found ? found.label : code;
     };
 
+    // ─────────────────────────────────────────────────────────────────────────
+    // REALTIME ROOM SYNCHRONIZATION (Listen to other party's transcripts)
+    // ─────────────────────────────────────────────────────────────────────────
+    useEffect(() => {
+        if (!roomId) return;
+
+        const sub = subscribeToRoomSignaling(roomId, (signal: RoomSignal) => {
+            if (signal.type === "live_transcript" && signal.transcript && signal.sender_id !== user?.id) {
+                const incomingSpeaker = signal.speaker_name || (signal.sender_role === "doctor" ? "Doctor" : "Patient");
+                const line: VoiceDialogueLine = {
+                    id: `${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+                    speaker: incomingSpeaker,
+                    role: signal.sender_role || "patient",
+                    text: signal.transcript,
+                    time: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
+                };
+                setDialogue((prev) => [...prev, line]);
+            }
+        });
+
+        signalingSubRef.current = sub;
+        return () => {
+            sub.unsubscribe();
+        };
+    }, [roomId, user?.id]);
+
+    // Append our own spoken utterance and broadcast to room
+    const appendSpokenUtterance = useCallback(
+        async (rawText: string) => {
+            if (!rawText || !rawText.trim()) return;
+            const cleanText = rawText.trim();
+
+            const entry: VoiceDialogueLine = {
+                id: `${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+                speaker: effectiveName,
+                role: effectiveRole,
+                text: cleanText,
+                time: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
+            };
+
+            setDialogue((prev) => [...prev, entry]);
+
+            // Broadcast to consultation room so remote peer and VideoPanel see it
+            if (roomId) {
+                try {
+                    await broadcastRoomSignal(roomId, {
+                        type: "live_transcript",
+                        sender_id: user?.id || "anonymous",
+                        sender_role: effectiveRole,
+                        speaker_name: effectiveName,
+                        transcript: cleanText,
+                        is_final: true,
+                        timestamp: new Date().toISOString(),
+                    });
+                } catch (broadcastErr) {
+                    console.warn("Failed to broadcast live transcript:", broadcastErr);
+                }
+            }
+        },
+        [effectiveName, effectiveRole, roomId, user?.id]
+    );
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // GNANI AI STT STREAMING WEBSOCKET
+    // ─────────────────────────────────────────────────────────────────────────
     const startRecording = async () => {
         setErrorMessage(null);
         try {
             const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
 
-            // Connect to FastAPI WebSocket proxy with selected language
+            // Connect to FastAPI Gnani AI WebSocket proxy with selected language
             const wsUrl = `ws://localhost:8000/ws/transcribe?lang=${language}`;
             const ws = new WebSocket(wsUrl);
             websocketRef.current = ws;
 
             ws.onopen = () => {
-                console.log(`WebSocket connected to ${wsUrl}`);
+                console.log(`Gnani STT WebSocket connected (${wsUrl})`);
             };
 
             ws.onclose = () => {
-                console.log("WebSocket closed");
+                console.log("Gnani STT WebSocket closed");
                 setIsProcessing(false);
             };
 
             ws.onmessage = (event) => {
                 try {
                     const data = JSON.parse(event.data);
-                    console.log("Received STT event:", data);
+                    console.log("Received Gnani STT event:", data);
 
                     if (data.type === "connected") {
                         setInterimTranscript(`Connected to Gnani STT (${getLangLabel(language)})`);
                     } else if (data.type === "speech_start") {
                         setInterimTranscript("Speech detected...");
                     } else if (data.type === "processing") {
-                        setInterimTranscript("Processing utterance...");
+                        setInterimTranscript("Processing audio stream...");
                     } else if (data.type === "transcript") {
-                        setTranscript((prev) => (prev ? `${prev} ${data.transcript}` : data.transcript));
                         setInterimTranscript("");
+                        appendSpokenUtterance(data.transcript);
                     } else if (data.type === "complete" || data.complete) {
-                        if (data.transcript) {
-                            setTranscript(data.transcript);
-                        }
                         setInterimTranscript("");
+                        if (data.transcript) {
+                            appendSpokenUtterance(data.transcript);
+                        }
                         setIsProcessing(false);
                     } else if (data.type === "error") {
                         setErrorMessage(data.message || "Transcription error occurred");
@@ -104,11 +219,11 @@ export default function VoicePanel() {
             };
 
             ws.onerror = (error) => {
-                console.error("WebSocket error:", error);
-                setErrorMessage("Failed to connect to transcription service. Make sure backend is running.");
+                console.error("Gnani STT WebSocket error:", error);
+                setErrorMessage("Transcription backend unavailable. Verify FastAPI server is running on port 8000.");
             };
 
-            // Setup Web Audio API for 16kHz PCM conversion (matches Gnani requirement)
+            // Setup Web Audio API for 16kHz PCM streaming (Gnani AI required format)
             const audioContext = new AudioContext({ sampleRate: 16000 });
             const source = audioContext.createMediaStreamSource(stream);
             const processor = audioContext.createScriptProcessor(4096, 1, 1);
@@ -129,11 +244,10 @@ export default function VoicePanel() {
             setIsRecording(true);
             setIsProcessing(false);
             setRecordingTime(0);
-            setTranscript("");
-            setInterimTranscript("Connecting to Gnani STT...");
+            setInterimTranscript("Listening for speech...");
         } catch (error) {
             console.error("Microphone access error:", error);
-            setErrorMessage("Microphone access is required. Please check browser microphone permissions.");
+            setErrorMessage("Microphone access is required. Please check browser permissions.");
         }
     };
 
@@ -153,7 +267,6 @@ export default function VoicePanel() {
     const stopRecording = () => {
         if (mediaRecorderRef.current && isRecording) {
             const { audioContext, source, processor, stream } = mediaRecorderRef.current;
-
             processor.disconnect();
             source.disconnect();
             audioContext.close();
@@ -169,7 +282,6 @@ export default function VoicePanel() {
             setInterimTranscript("Finalizing transcription...");
             websocketRef.current.send(JSON.stringify({ action: "stop" }));
 
-            // Safety timeout to close connection if backend doesn't close within 3s
             setTimeout(() => {
                 if (websocketRef.current && websocketRef.current.readyState === WebSocket.OPEN) {
                     websocketRef.current.close();
@@ -198,8 +310,10 @@ export default function VoicePanel() {
                         </svg>
                     </div>
                     <div>
-                        <div className="card-title">Live Interaction</div>
-                        <div className="card-subtitle">Gnani AI Voice recording</div>
+                        <div className="card-title">Live Voice Documentation</div>
+                        <div className="card-subtitle">
+                            Gnani AI Multi-lingual STT {roomId ? `• Room: ${roomId}` : ""}
+                        </div>
                     </div>
                 </div>
                 <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
@@ -211,31 +325,37 @@ export default function VoicePanel() {
 
             <div className="card-body">
                 {/* Language Selection Mechanism */}
-                <div style={{ marginBottom: "16px", display: "flex", alignItems: "center", gap: "10px" }}>
-                    <label htmlFor="voice-language-select" style={{ fontSize: "0.85rem", fontWeight: 600, color: "var(--d-text)" }}>
-                        Spoken Language:
-                    </label>
-                    <select
-                        id="voice-language-select"
-                        value={language}
-                        onChange={(e) => setLanguage(e.target.value as Language)}
-                        disabled={isRecording || isProcessing}
-                        style={{
-                            padding: "6px 12px",
-                            borderRadius: "var(--d-radius-sm)",
-                            border: "1px solid var(--d-border)",
-                            background: "var(--d-surface)",
-                            color: "var(--d-text)",
-                            fontSize: "0.85rem",
-                            cursor: isRecording ? "not-allowed" : "pointer",
-                        }}
-                    >
-                        {LANGUAGES.map((lang) => (
-                            <option key={lang.code} value={lang.code}>
-                                {lang.label} — {lang.native}
-                            </option>
-                        ))}
-                    </select>
+                <div style={{ marginBottom: "16px", display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: "10px" }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+                        <label htmlFor="voice-language-select" style={{ fontSize: "0.85rem", fontWeight: 600, color: "var(--d-text)" }}>
+                            Language:
+                        </label>
+                        <select
+                            id="voice-language-select"
+                            value={language}
+                            onChange={(e) => setLanguage(e.target.value as Language)}
+                            disabled={isRecording || isProcessing}
+                            style={{
+                                padding: "6px 12px",
+                                borderRadius: "var(--d-radius-sm)",
+                                border: "1px solid var(--d-border)",
+                                background: "var(--d-surface)",
+                                color: "var(--d-text)",
+                                fontSize: "0.85rem",
+                                cursor: isRecording ? "not-allowed" : "pointer",
+                            }}
+                        >
+                            {LANGUAGES.map((lang) => (
+                                <option key={lang.code} value={lang.code}>
+                                    {lang.label} — {lang.native}
+                                </option>
+                            ))}
+                        </select>
+                    </div>
+
+                    <div style={{ fontSize: "0.82rem", color: "var(--d-text-muted)" }}>
+                        Speaker: <strong>{effectiveName}</strong> ({effectiveRole})
+                    </div>
                 </div>
 
                 {errorMessage && (
@@ -280,7 +400,7 @@ export default function VoicePanel() {
                                 ? `Recording in ${getLangLabel(language)}...`
                                 : isProcessing
                                 ? "Transcribing speech..."
-                                : `Tap to record in ${getLangLabel(language)}`}
+                                : `Tap to record clinical speech in ${getLangLabel(language)}`}
                         </div>
                         <div className="voice-duration">
                             {formatTime(recordingTime)}
@@ -301,29 +421,57 @@ export default function VoicePanel() {
                     ))}
                 </div>
 
-                <div className="transcription-area" style={{ minHeight: "70px", padding: "12px", border: "1px solid var(--d-border)", borderRadius: "var(--d-radius-sm)", marginTop: "14px" }}>
-                    <p style={{ margin: 0, fontSize: "0.95rem", lineHeight: "1.5" }}>
-                        {transcript || <span style={{ color: "var(--d-text-muted)" }}>Transcription will appear here...</span>}
-                        {interimTranscript && (
-                            <span style={{ color: "var(--d-primary)", fontStyle: "italic", marginLeft: "6px" }}>
-                                ({interimTranscript})
-                            </span>
-                        )}
-                    </p>
-                    <button
-                        onClick={() => setTranscript("Test transcript from button")}
-                        style={{
-                            marginTop: "10px",
-                            padding: "4px 10px",
-                            fontSize: "0.75rem",
-                            border: "1px solid var(--d-border)",
-                            borderRadius: "var(--d-radius-sm)",
-                            background: "transparent",
-                            cursor: "pointer",
-                        }}
-                    >
-                        Test Display
-                    </button>
+                {/* Transcription Dialogue Area */}
+                <div
+                    className="transcription-area"
+                    style={{
+                        minHeight: "110px",
+                        maxHeight: "220px",
+                        overflowY: "auto",
+                        padding: "14px",
+                        border: "1px solid var(--d-border)",
+                        borderRadius: "var(--d-radius-sm)",
+                        marginTop: "14px",
+                        background: "var(--d-surface)",
+                    }}
+                >
+                    {dialogue.length === 0 && !interimTranscript ? (
+                        <p style={{ margin: 0, fontSize: "0.88rem", color: "var(--d-text-muted)" }}>
+                            Voice transcription will appear here tagged with speaker identity...
+                        </p>
+                    ) : (
+                        <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
+                            {dialogue.map((entry) => (
+                                <div key={entry.id} style={{ fontSize: "0.88rem", lineHeight: "1.4" }}>
+                                    <strong style={{ color: entry.role === "doctor" ? "#2563EB" : "#0D9488" }}>
+                                        {entry.speaker}:
+                                    </strong>{" "}
+                                    <span>{entry.text}</span>
+                                    <span style={{ fontSize: "0.74rem", color: "var(--d-text-muted)", marginLeft: "6px" }}>
+                                        {entry.time}
+                                    </span>
+                                </div>
+                            ))}
+                        </div>
+                    )}
+
+                    {interimTranscript && (
+                        <p style={{ margin: "8px 0 0", color: "var(--d-primary)", fontStyle: "italic", fontSize: "0.85rem" }}>
+                            ({interimTranscript})
+                        </p>
+                    )}
+                </div>
+
+                <div style={{ marginTop: "12px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                    <span style={{ fontSize: "0.78rem", color: "var(--d-text-muted)" }}>
+                        {isRecording ? "🔴 Capturing microphone audio..." : isProcessing ? "Transcribing speech..." : "Gnani STT Ready"}
+                    </span>
+
+                    {dialogue.length > 0 && (
+                        <span style={{ fontSize: "0.78rem", color: "var(--d-text-muted)" }}>
+                            {dialogue.length} dialogue {dialogue.length === 1 ? "entry" : "entries"} recorded
+                        </span>
+                    )}
                 </div>
             </div>
         </div>

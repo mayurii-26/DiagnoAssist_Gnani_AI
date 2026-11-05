@@ -3,6 +3,7 @@
 import { createContext, useContext, useEffect, useState, useCallback, ReactNode } from "react";
 import { useRouter, usePathname } from "next/navigation";
 import { createClient } from "@/lib/supabase";
+import { updateDoctorPresence } from "@/lib/consultationService";
 import type { User } from "@supabase/supabase-js";
 
 interface AuthContextType {
@@ -68,10 +69,20 @@ export default function AuthProvider({ children }: { children: ReactNode }) {
 
     const signOut = useCallback(async () => {
         const supabase = createClient();
+
+        // If user was a doctor, mark them offline before signing out
+        if (user && user.user_metadata?.role === "doctor") {
+            try {
+                await updateDoctorPresence(user.id, false);
+            } catch (err) {
+                console.warn("Could not clean up doctor presence on signOut:", err);
+            }
+        }
+
         await supabase.auth.signOut();
         setUser(null);
         router.replace("/login");
-    }, [router]);
+    }, [user, router]);
 
     // Show loading only on initial mount
     if (!initialized) {

@@ -1,5 +1,6 @@
 import Sidebar from "@/components/Sidebar";
 import TopBar from "@/components/TopBar";
+import DoctorPresenceManager from "@/components/DoctorPresenceManager";
 
 export default function DoctorLayout({ children }: { children: React.ReactNode }) {
     return (
@@ -9,6 +10,7 @@ export default function DoctorLayout({ children }: { children: React.ReactNode }
                 <TopBar />
                 <div className="dashboard-content">{children}</div>
             </div>
+            <DoctorPresenceManager />
         </div>
     );
 }

@@ -1,6 +1,7 @@
 import os
 import asyncio
 import json
+from datetime import datetime, timezone
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
@@ -86,6 +87,114 @@ def login(payload: LoginRequest):
         if "Invalid" in error_message or "credentials" in error_message.lower():
             raise HTTPException(status_code=401, detail="Invalid email or password.")
         raise HTTPException(status_code=500, detail="Authentication service error.")
+
+
+class SaveTranscriptRequest(BaseModel):
+    room_id: str
+    doctor_id: str
+    patient_id: str
+    transcript: str
+    duration: int = 0
+
+
+@app.post("/consultations/transcripts")
+def save_consultation_transcript(payload: SaveTranscriptRequest):
+    """
+    Persist completed consultation transcript into Supabase transcriptions table.
+    Ensures idempotency / duplicate prevention by checking if a transcript
+    for this room_id already exists.
+    """
+    if not supabase:
+        raise HTTPException(status_code=500, detail="Database client not initialized.")
+
+    if not payload.transcript.strip():
+        return {"status": "skipped", "message": "Transcript was empty"}
+
+    try:
+        now_iso = datetime.now(timezone.utc).isoformat()
+
+        # Check for existing transcript to prevent duplicates
+        existing = (
+            supabase.table("transcriptions")
+            .select("id, transcript, named_entities")
+            .eq("doctor_id", payload.doctor_id)
+            .eq("patient_id", payload.patient_id)
+            .execute()
+        )
+
+        existing_record = None
+        if existing and existing.data:
+            for row in existing.data:
+                ne = row.get("named_entities")
+                if isinstance(ne, dict) and ne.get("room_id") == payload.room_id:
+                    existing_record = row
+                    break
+
+        if existing_record:
+            # Update existing record if new text is longer or updated
+            if len(payload.transcript) >= len(existing_record.get("transcript") or ""):
+                supabase.table("transcriptions").update({
+                    "transcript": payload.transcript,
+                    "duration": payload.duration,
+                    "updated_at": now_iso
+                }).eq("id", existing_record["id"]).execute()
+
+            return {
+                "status": "updated",
+                "id": existing_record["id"],
+                "message": "Existing transcript updated"
+            }
+
+        # Otherwise, insert new transcript row
+        res = supabase.table("transcriptions").insert({
+            "doctor_id": payload.doctor_id,
+            "patient_id": payload.patient_id,
+            "transcript": payload.transcript.strip(),
+            "duration": payload.duration,
+            "named_entities": {"room_id": payload.room_id},
+            "created_at": now_iso,
+            "updated_at": now_iso
+        }).execute()
+
+        # Update call status in video_calls
+        try:
+            supabase.table("video_calls").update({
+                "status": "ended",
+                "ended_at": now_iso
+            }).or_(f"room_id.eq.{payload.room_id},room_id.like.%{payload.room_id}%").execute()
+        except Exception:
+            pass
+
+        inserted_id = res.data[0]["id"] if (res and res.data) else None
+        return {"status": "created", "id": inserted_id}
+
+    except Exception as e:
+        print(f"Error persisting transcript: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/consultations/transcripts")
+def get_consultation_transcripts(user_id: str, role: str = "patient"):
+    """
+    Fetch consultation transcripts for an authorized participant (doctor or patient).
+    Uses service key client to ensure reliable access for both roles.
+    """
+    if not supabase:
+        raise HTTPException(status_code=500, detail="Database client not initialized.")
+
+    try:
+        id_column = "doctor_id" if role == "doctor" else "patient_id"
+        res = (
+            supabase.table("transcriptions")
+            .select("*")
+            .eq(id_column, user_id)
+            .order("created_at", desc=True)
+            .execute()
+        )
+        return res.data or []
+    except Exception as e:
+        print(f"Error fetching transcripts: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.websocket("/ws/transcribe")
