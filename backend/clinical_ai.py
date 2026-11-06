@@ -587,3 +587,244 @@ async def generate_clinical_report_ai(
     # 3. Deterministic Clinical NLP Extraction (Grounded, reliable fallback)
     report = extract_fallback_clinical_report(clean_transcript, patient_name, doctor_name)
     return report
+
+
+async def generate_multilingual_chatbot_reply(
+    user_message: str,
+    target_language: str = "en",
+    conversation_history: Optional[List[Dict[str, str]]] = None,
+    patient_id: Optional[str] = None
+) -> Dict[str, Any]:
+    """
+    Multilingual Clinical AI Chatbot engine grounded strictly in DiagnoAssist's
+    medical Knowledge Base, ICD-10 diagnostic definitions, and verified patient
+    consultation records.
+    Features:
+      - Multi-language input support
+      - Patient past consultation context integration (approved EMR records & plans)
+      - Medical concept retrieval
+      - Urgent red-flag emergency screening
+      - Indian language translation
+      - Non-prescriptive clinical guidance
+    """
+    clean_msg = user_message.strip()
+    if not clean_msg:
+        return {
+            "reply": "Please share your medical query or symptoms.",
+            "language": target_language,
+            "is_emergency": False,
+            "matched_topics": [],
+            "has_patient_context": False
+        }
+
+    try:
+        from backend.services.multilingual_service import (
+            translate_text_gnani,
+            detect_script_language,
+            normalize_lang_code
+        )
+    except ImportError:
+        try:
+            from services.multilingual_service import (
+                translate_text_gnani,
+                detect_script_language,
+                normalize_lang_code
+            )
+        except ImportError:
+            translate_text_gnani = None
+            detect_script_language = lambda t: "en"
+            normalize_lang_code = lambda c: c
+
+    # 1. Determine language
+    tgt_lang = normalize_lang_code(target_language) if target_language else detect_script_language(clean_msg)
+    
+    # 2. Translate query to English if necessary for Knowledge Base matching
+    english_query = clean_msg
+    if tgt_lang != "en" and translate_text_gnani:
+        try:
+            english_query = await translate_text_gnani(clean_msg, target_language="en", source_language=tgt_lang)
+        except Exception as te:
+            print(f"[Chatbot] Warning translating query to English: {te}")
+            english_query = clean_msg
+
+    lower_query = english_query.lower()
+
+    # 3. Emergency Red-Flag Screening
+    emergency_keywords = [
+        "chest pain", "pain in my chest", "pain in the chest", "pain in chest", "tightness in chest", 
+        "chest tightness", "chest pressure", "heart attack", "cardiac arrest",
+        "shortness of breath", "trouble breathing", "cannot breathe", "difficulty breathing", "hard to breathe",
+        "unable to breathe", "breathless", "suffocating", "gasping for air",
+        "unconscious", "passed out", "blacked out", "fainted", "stroke", "paralysis", "facial droop",
+        "coughing blood", "hemoptysis", "severe bleeding", "hemorrhage", "anaphylaxis", "severe allergic reaction",
+        "suicidal", "severe trauma", "poisoning", "seizure", "convulsions",
+        # Direct native language safety triggers
+        "छातीत वेदना", "छातीत दुखणे", "छाती में दर्द", "सीने में दर्द", "सीने का दर्द",
+        "श्वास घेण्यास त्रास", "दम घुट", "सांस फूलना", "सांस लेने में", "बेशुद्ध", "बेहोश",
+        "மார்பு வலி", "மூச்சுத் திணறல்", "ఛాతీ నొప్పి", "శ్వాస ఆడకపోవడం"
+    ]
+
+    raw_lower = clean_msg.lower()
+    is_emergency = any(kw in lower_query or kw in raw_lower for kw in emergency_keywords)
+    matched_topics: List[str] = []
+    has_patient_context = False
+
+    if is_emergency:
+        reply_en = (
+            "🚨 CRITICAL MEDICAL ALERT: Your described symptoms indicate a potential medical emergency. "
+            "Please immediately contact emergency services (Dial 108 or 112 in India) or proceed to the "
+            "nearest hospital emergency department. Do not wait for a routine consultation."
+        )
+    else:
+        # 4. Fetch Previous Doctor Consultations Context (if patient_id provided)
+        patient_history_context = []
+        if patient_id:
+            try:
+                from backend.main import supabase as default_sb
+                sb = default_sb
+                if sb:
+                    res_pd = (
+                        sb.table("patient_details")
+                        .select("id, summary, structured_diagnosis, consultation_date, status, doctor_id")
+                        .eq("patient_id", patient_id)
+                        .order("consultation_date", desc=True)
+                        .limit(3)
+                        .execute()
+                    )
+
+                    doctor_ids = [r["doctor_id"] for r in (res_pd.data or []) if r.get("doctor_id")]
+                    doc_name_map = {}
+                    if doctor_ids:
+                        res_docs = sb.table("user_profiles").select("id, name").in_("id", doctor_ids).execute()
+                        for d in (res_docs.data or []):
+                            doc_name_map[d["id"]] = d["name"]
+
+                    for record in (res_pd.data or []):
+                        doc_name = doc_name_map.get(record.get("doctor_id")) or "Dr. Physician"
+                        diag = record.get("structured_diagnosis") or {}
+                        summary = record.get("summary") or ""
+                        date_str = record.get("consultation_date")
+                        date_formatted = ""
+                        if date_str:
+                            try:
+                                date_formatted = datetime.fromisoformat(date_str.replace("Z", "+00:00")).strftime("%B %d, %Y")
+                            except Exception:
+                                date_formatted = str(date_str)[:10]
+
+                        chief = diag.get("chief_complaint") or ""
+                        assessment = diag.get("assessment") or ""
+                        plan = diag.get("plan") or ""
+                        follow_up = diag.get("follow_up") or ""
+
+                        patient_history_context.append({
+                            "date": date_formatted or "Recent Visit",
+                            "doctor": doc_name,
+                            "chief_complaint": chief,
+                            "assessment": assessment,
+                            "plan": plan,
+                            "follow_up": follow_up,
+                            "summary": summary
+                        })
+            except Exception as pe:
+                print(f"[Chatbot] Note: could not query patient history: {pe}")
+
+        has_patient_context = len(patient_history_context) > 0
+        latest_consult = patient_history_context[0] if has_patient_context else None
+
+        # Check if the user is asking specifically about past doctor visits or prescriptions
+        history_keywords = [
+            "last visit", "previous visit", "previous consultation", "last consultation",
+            "previous meeting", "past meeting", "doctor said", "doctor prescribe", "prescribed",
+            "prescription", "my doctor", "last time", "earlier consultation", "my medicine",
+            "my diagnosis", "what did the doctor", "medicines from last", "last meeting",
+            "पिछली", "पिछले", "डॉक्टर ने", "दवाई", "पर्चा", "दवा",
+            "आधीच्या", "डॉक्टरांनी काय", "औषध", "तपासणी"
+        ]
+        is_asking_history = any(hk in lower_query or hk in raw_lower for hk in history_keywords)
+
+        if is_asking_history and latest_consult:
+            doc = latest_consult["doctor"]
+            dt = latest_consult["date"]
+            chief = latest_consult["chief_complaint"]
+            assessment = latest_consult["assessment"] or latest_consult["summary"]
+            plan = latest_consult["plan"]
+
+            reply_parts = [f"According to your consultation record on {dt} with {doc}:"]
+            if chief:
+                reply_parts.append(f"• Reason for Visit: {chief}")
+            if assessment:
+                reply_parts.append(f"• Doctor's Assessment: {assessment}")
+            if plan:
+                reply_parts.append(f"• Prescribed Treatment & Instructions: {plan}")
+            elif latest_consult.get("summary"):
+                reply_parts.append(f"• Summary: {latest_consult['summary'][:250]}")
+
+            reply_parts.append(
+                "⚠️ Clinical Reminder: Please follow the specific medications and dosages prescribed by your doctor. "
+                "Do not change your regimen without physician sign-off. You can also book a follow-up consultation with your doctor right here on DiagnoAssist."
+            )
+            reply_en = "\n".join(reply_parts)
+            matched_topics.append(f"Consultation: {dt}")
+
+        else:
+            # 5. Search Medical Knowledge Base
+            matched_entries = []
+            for entry in ICD_10_KNOWLEDGE_BASE:
+                for kw in entry["keywords"]:
+                    if kw in lower_query:
+                        matched_entries.append(entry)
+                        if entry["diagnosis"] not in matched_topics:
+                            matched_topics.append(entry["diagnosis"])
+                        break
+
+            if matched_entries:
+                primary_topic = matched_entries[0]["diagnosis"]
+                clinical_concept = matched_entries[0]["clinical_concept"]
+                reply_en = (
+                    f"Regarding your query about {primary_topic.lower()}: This relates to {clinical_concept.lower()}. "
+                    f"For symptomatic relief, ensure adequate hydration, rest in a comfortable room, and monitor your symptoms. "
+                )
+                if latest_consult and (latest_consult.get("chief_complaint") or latest_consult.get("assessment")):
+                    reply_en += (
+                        f"\n\n📋 Clinical History Context: Your records show a consultation on {latest_consult['date']} with {latest_consult['doctor']} for '{latest_consult['chief_complaint'] or 'medical review'}'. "
+                        f"If your symptoms persist or differ from your previous visit, please follow up with your doctor."
+                    )
+                    matched_topics.append(f"History: {latest_consult['date']}")
+                else:
+                    reply_en += (
+                        f"⚠️ Clinical Note: This information is for general educational guidance only and is not a formal diagnosis or prescription. "
+                        f"Please consult a certified physician on DiagnoAssist for an examination and personalized treatment plan."
+                    )
+            elif latest_consult:
+                reply_en = (
+                    f"Thank you for contacting DiagnoAssist. Based on your medical records, your last consultation was on {latest_consult['date']} with {latest_consult['doctor']}. "
+                    f"To better assist you, please describe your current symptoms, their duration, and severity. "
+                    f"You can also schedule a follow-up video consultation with an available doctor now."
+                )
+                matched_topics.append(f"History: {latest_consult['date']}")
+            else:
+                reply_en = (
+                    "Thank you for reaching out to DiagnoAssist Clinical Assistant. "
+                    "To better assist you, could you please mention how long you have experienced these symptoms, "
+                    "their severity, and whether you have any fever or pain? "
+                    "You can also schedule a live video consultation with an available doctor right now."
+                )
+
+    # 6. Translate reply to patient's target language
+    final_reply = reply_en
+    if tgt_lang != "en" and translate_text_gnani:
+        try:
+            final_reply = await translate_text_gnani(reply_en, target_language=tgt_lang, source_language="en")
+        except Exception as te:
+            print(f"[Chatbot] Error translating response to {tgt_lang}: {te}")
+            final_reply = reply_en
+
+    return {
+        "reply": final_reply,
+        "language": tgt_lang,
+        "is_emergency": is_emergency,
+        "matched_topics": matched_topics,
+        "has_patient_context": has_patient_context,
+        "english_transcript": english_query
+    }
+

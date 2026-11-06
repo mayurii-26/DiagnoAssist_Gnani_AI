@@ -6,6 +6,8 @@ import { createClient } from "@/lib/supabase";
 import {
     getConsultationHistory,
     getClinicalReports,
+    translateTranscript,
+    SUPPORTED_MULTILINGUAL_LANGUAGES,
     type CompletedConsultation,
     type ClinicalReport,
 } from "@/lib/consultationService";
@@ -22,6 +24,46 @@ export default function PatientHistoryPage() {
     const [activePatientName, setActivePatientName] = useState<string>("Patient");
     const [patientProfileName, setPatientProfileName] = useState<string>("Patient");
     const [copySuccess, setCopySuccess] = useState(false);
+
+    // Multilingual Transcript State
+    const [transcriptLang, setTranscriptLang] = useState<string>("en");
+    const [isTranslatingTranscript, setIsTranslatingTranscript] = useState(false);
+    const [transcriptTranslations, setTranscriptTranslations] = useState<Record<string, Record<string, string>>>({});
+    const [transcriptTransError, setTranscriptTransError] = useState<string | null>(null);
+
+    const handleTranscriptLangChange = async (targetLang: string) => {
+        if (!selectedConsultation || !selectedConsultation.transcript) return;
+        setTranscriptLang(targetLang);
+        setTranscriptTransError(null);
+        if (targetLang === "en") return;
+
+        const consultId = selectedConsultation.id || selectedConsultation.roomId;
+        if (transcriptTranslations[consultId]?.[targetLang]) {
+            return;
+        }
+
+        setIsTranslatingTranscript(true);
+        try {
+            const translated = await translateTranscript(
+                selectedConsultation.transcript,
+                targetLang,
+                consultId,
+                "en"
+            );
+            setTranscriptTranslations((prev) => ({
+                ...prev,
+                [consultId]: {
+                    ...(prev[consultId] || {}),
+                    [targetLang]: translated,
+                },
+            }));
+        } catch (err: unknown) {
+            const msg = err instanceof Error ? err.message : "Translation failed";
+            setTranscriptTransError(msg);
+        } finally {
+            setIsTranslatingTranscript(false);
+        }
+    };
 
     const loadHistoryAndReports = useCallback(async () => {
         if (!user?.id) return;
@@ -144,6 +186,32 @@ export default function PatientHistoryPage() {
                         <span className="status-badge completed">Verified EMR</span>
                     </div>
 
+                    {/* Multilingual Notice Banner */}
+                    <div
+                        style={{
+                            padding: "10px 22px",
+                            background: "linear-gradient(90deg, #EFF6FF 0%, #F0FDF4 100%)",
+                            borderBottom: "1px solid #DBEAFE",
+                            display: "flex",
+                            alignItems: "center",
+                            justifyContent: "space-between",
+                            fontSize: "0.82rem",
+                            color: "#1E40AF",
+                            flexWrap: "wrap",
+                            gap: "8px",
+                        }}
+                    >
+                        <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                            <span>🌐</span>
+                            <span>
+                                <strong>Multilingual Clinical Intelligence Active:</strong> Click <strong>&quot;🌐 Transcript&quot;</strong> to read your conversation in 9 Indian languages, or <strong>&quot;View Clinical Report&quot;</strong> to read &amp; export translated medical records.
+                            </span>
+                        </div>
+                        <span style={{ fontSize: "0.75rem", background: "#DBEAFE", color: "#1D4ED8", padding: "2px 8px", borderRadius: "10px", fontWeight: 600 }}>
+                            Gnani AI Vachana
+                        </span>
+                    </div>
+
                     <div className="card-body" style={{ padding: 0 }}>
                         {loading ? (
                             <div style={{ padding: "40px", textAlign: "center", color: "var(--d-text-muted)" }}>
@@ -248,14 +316,14 @@ export default function PatientHistoryPage() {
                                                                     padding: "6px 12px",
                                                                     borderRadius: "var(--d-radius-sm)",
                                                                     border: "1px solid var(--d-primary)",
-                                                                    background: "transparent",
+                                                                    background: "#FFFFFF",
                                                                     color: "var(--d-primary)",
                                                                     fontWeight: 600,
                                                                     cursor: "pointer",
                                                                     fontSize: "0.82rem",
                                                                 }}
                                                             >
-                                                                Transcript
+                                                                🌐 Transcript
                                                             </button>
                                                         </div>
                                                     </td>
@@ -314,7 +382,7 @@ export default function PatientHistoryPage() {
                             overflow: "hidden",
                         }}
                     >
-                        {/* Modal Header */}
+                        {/* Modal Header with Language Selector */}
                         <div
                             style={{
                                 padding: "18px 24px",
@@ -322,6 +390,8 @@ export default function PatientHistoryPage() {
                                 display: "flex",
                                 justifyContent: "space-between",
                                 alignItems: "center",
+                                flexWrap: "wrap",
+                                gap: "10px",
                             }}
                         >
                             <div>
@@ -332,18 +402,53 @@ export default function PatientHistoryPage() {
                                     Physician: <strong>{selectedConsultation.doctorName}</strong> • {formatDate(selectedConsultation.createdAt)}
                                 </p>
                             </div>
-                            <button
-                                onClick={() => setSelectedConsultation(null)}
-                                style={{
-                                    background: "none",
-                                    border: "none",
-                                    fontSize: "1.4rem",
-                                    color: "var(--d-text-muted)",
-                                    cursor: "pointer",
-                                }}
-                            >
-                                ×
-                            </button>
+
+                            <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
+                                {/* Language dropdown */}
+                                <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+                                    <label htmlFor="patient-transcript-lang" style={{ fontSize: "0.8rem", color: "var(--d-text-muted)", fontWeight: 500 }}>
+                                        Language:
+                                    </label>
+                                    <select
+                                        id="patient-transcript-lang"
+                                        value={transcriptLang}
+                                        onChange={(e) => handleTranscriptLangChange(e.target.value)}
+                                        style={{
+                                            padding: "5px 10px",
+                                            borderRadius: "var(--d-radius-sm)",
+                                            border: "1px solid var(--d-border)",
+                                            background: "var(--d-surface)",
+                                            color: "var(--d-text)",
+                                            fontSize: "0.82rem",
+                                            fontWeight: 600,
+                                            cursor: "pointer",
+                                        }}
+                                    >
+                                        <option value="en">English (Original)</option>
+                                        {SUPPORTED_MULTILINGUAL_LANGUAGES.filter((l) => l.code !== "en").map((l) => (
+                                            <option key={l.code} value={l.code}>
+                                                {l.native} ({l.label})
+                                            </option>
+                                        ))}
+                                    </select>
+                                </div>
+
+                                <button
+                                    onClick={() => {
+                                        setSelectedConsultation(null);
+                                        setTranscriptLang("en");
+                                    }}
+                                    style={{
+                                        background: "none",
+                                        border: "none",
+                                        fontSize: "1.4rem",
+                                        color: "var(--d-text-muted)",
+                                        cursor: "pointer",
+                                    }}
+                                >
+                                    ×
+                                </button>
+                            </div>
                         </div>
 
                         {/* Modal Metadata Summary */}
@@ -353,25 +458,94 @@ export default function PatientHistoryPage() {
                                 background: "var(--d-surface-alt, #F8FAFC)",
                                 borderBottom: "1px solid var(--d-border)",
                                 display: "flex",
+                                justifyContent: "space-between",
+                                alignItems: "center",
                                 gap: "20px",
                                 fontSize: "0.82rem",
                                 color: "var(--d-text)",
                                 flexWrap: "wrap",
                             }}
                         >
-                            <div>
-                                <span style={{ color: "var(--d-text-muted)" }}>Session Duration:</span>{" "}
-                                <strong>{formatDuration(selectedConsultation.duration)}</strong>
+                            <div style={{ display: "flex", gap: "16px", flexWrap: "wrap" }}>
+                                <div>
+                                    <span style={{ color: "var(--d-text-muted)" }}>Session Duration:</span>{" "}
+                                    <strong>{formatDuration(selectedConsultation.duration)}</strong>
+                                </div>
+                                <div>
+                                    <span style={{ color: "var(--d-text-muted)" }}>Physician:</span>{" "}
+                                    <strong>{selectedConsultation.doctorName}</strong>
+                                </div>
+                                <div>
+                                    <span style={{ color: "var(--d-text-muted)" }}>Reason:</span>{" "}
+                                    <strong>{selectedConsultation.reason || "General Medical Consultation"}</strong>
+                                </div>
                             </div>
+
+                            {/* Status badge */}
                             <div>
-                                <span style={{ color: "var(--d-text-muted)" }}>Physician:</span>{" "}
-                                <strong>{selectedConsultation.doctorName}</strong>
-                            </div>
-                            <div>
-                                <span style={{ color: "var(--d-text-muted)" }}>Reason:</span>{" "}
-                                <strong>{selectedConsultation.reason || "General Medical Consultation"}</strong>
+                                {transcriptLang !== "en" ? (
+                                    <span
+                                        style={{
+                                            padding: "3px 8px",
+                                            borderRadius: "12px",
+                                            fontSize: "0.74rem",
+                                            fontWeight: 600,
+                                            background: "#EFF6FF",
+                                            color: "#1D4ED8",
+                                            border: "1px solid #BFDBFE",
+                                        }}
+                                    >
+                                        Gnani Translation ({SUPPORTED_MULTILINGUAL_LANGUAGES.find((l) => l.code === transcriptLang)?.label || transcriptLang})
+                                    </span>
+                                ) : (
+                                    <span
+                                        style={{
+                                            padding: "3px 8px",
+                                            borderRadius: "12px",
+                                            fontSize: "0.74rem",
+                                            fontWeight: 600,
+                                            background: "#F3F4F6",
+                                            color: "#4B5563",
+                                        }}
+                                    >
+                                        Original Speech
+                                    </span>
+                                )}
                             </div>
                         </div>
+
+                        {/* Translation progress feedback */}
+                        {isTranslatingTranscript && (
+                            <div
+                                style={{
+                                    padding: "8px 24px",
+                                    background: "#FEF3C7",
+                                    borderBottom: "1px solid #FCD34D",
+                                    fontSize: "0.8rem",
+                                    color: "#92400E",
+                                    display: "flex",
+                                    alignItems: "center",
+                                    gap: "8px",
+                                }}
+                            >
+                                <span style={{ width: "8px", height: "8px", borderRadius: "50%", background: "#F59E0B", animation: "pulse 1.2s infinite" }} />
+                                Translating dialogue log into {SUPPORTED_MULTILINGUAL_LANGUAGES.find((l) => l.code === transcriptLang)?.label}...
+                            </div>
+                        )}
+
+                        {transcriptTransError && (
+                            <div
+                                style={{
+                                    padding: "8px 24px",
+                                    background: "#FEE2E2",
+                                    borderBottom: "1px solid #FCA5A5",
+                                    fontSize: "0.8rem",
+                                    color: "#B91C1C",
+                                }}
+                            >
+                                ⚠️ Translation failed: {transcriptTransError} (Showing original English transcript)
+                            </div>
+                        )}
 
                         {/* Transcript Dialogue Content */}
                         <div
@@ -385,23 +559,25 @@ export default function PatientHistoryPage() {
                         >
                             {selectedConsultation.transcript ? (
                                 <div style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
-                                    {selectedConsultation.transcript.split("\n").map((line, idx) => {
-                                        const isDoctor = line.startsWith("[Dr") || line.startsWith("[Doctor");
-                                        return (
-                                            <div
-                                                key={idx}
-                                                style={{
-                                                    padding: "10px 14px",
-                                                    borderRadius: "8px",
-                                                    background: isDoctor ? "#EFF6FF" : "#F0FDF4",
-                                                    border: `1px solid ${isDoctor ? "#BFDBFE" : "#BBF7D0"}`,
-                                                    color: isDoctor ? "#1E40AF" : "#166534",
-                                                }}
-                                            >
-                                                {line}
-                                            </div>
-                                        );
-                                    })}
+                                    {((transcriptLang !== "en" && transcriptTranslations[selectedConsultation.id || selectedConsultation.roomId]?.[transcriptLang]) || selectedConsultation.transcript)
+                                        .split("\n")
+                                        .map((line, idx) => {
+                                            const isDoctor = line.startsWith("[Dr") || line.startsWith("[Doctor");
+                                            return (
+                                                <div
+                                                    key={idx}
+                                                    style={{
+                                                        padding: "10px 14px",
+                                                        borderRadius: "8px",
+                                                        background: isDoctor ? "#EFF6FF" : "#F0FDF4",
+                                                        border: `1px solid ${isDoctor ? "#BFDBFE" : "#BBF7D0"}`,
+                                                        color: isDoctor ? "#1E40AF" : "#166534",
+                                                    }}
+                                                >
+                                                    {line}
+                                                </div>
+                                            );
+                                        })}
                                 </div>
                             ) : (
                                 <p style={{ color: "var(--d-text-muted)", fontStyle: "italic", textAlign: "center", margin: "40px 0" }}>

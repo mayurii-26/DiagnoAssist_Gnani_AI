@@ -177,6 +177,33 @@ export async function getRegisteredDoctors(): Promise<DoctorProfile[]> {
     });
 }
 
+export interface RegisteredPatient {
+    id: string;
+    name: string;
+    role: "patient";
+    phone?: string | null;
+    created_at?: string;
+}
+
+/**
+ * Fetches all registered patients from the system user base.
+ * Used by doctors to select patients for direct clinical consultations.
+ */
+export async function getRegisteredPatients(): Promise<RegisteredPatient[]> {
+    const supabase = createClient();
+    const { data: profiles, error } = await supabase
+        .from("user_profiles")
+        .select("id, name, role, phone, created_at")
+        .eq("role", "patient")
+        .order("name", { ascending: true });
+
+    if (error) {
+        console.error("Error fetching registered patients:", error);
+        return [];
+    }
+    return (profiles || []) as RegisteredPatient[];
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // 2. CONSULTATION REQUEST MANAGEMENT
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1139,11 +1166,23 @@ export async function saveConsultationTranscript(
             return { success: false, error: insErr.message };
         }
 
-        // Also mark video_calls as ended
-        await supabase
+        // Also ensure video_calls record exists and is marked as ended
+        const { data: updatedCalls } = await supabase
             .from("video_calls")
             .update({ status: "ended", ended_at: nowIso })
-            .or(`room_id.eq.${roomId},room_id.like.%${roomId}%`);
+            .or(`room_id.eq.${roomId},room_id.like.%${roomId}%`)
+            .select("id");
+
+        if (!updatedCalls || updatedCalls.length === 0) {
+            await supabase.from("video_calls").insert({
+                doctor_id: doctorId,
+                patient_id: patientId,
+                room_id: roomId,
+                status: "ended",
+                created_at: nowIso,
+                ended_at: nowIso,
+            });
+        }
 
         savedRoomsCache.add(roomId);
         return { success: true, id: inserted?.id };
@@ -1190,19 +1229,14 @@ export async function getConsultationHistory(
         transcripts = data;
     }
 
-    // Build transcript map by room_id or by doctor_id + patient_id
+    // Build transcript map by room_id
     const transcriptByRoom = new Map<string, any>();
-    const transcriptByPeer = new Map<string, any>();
 
     if (transcripts) {
         for (const t of transcripts) {
             const ne = t.named_entities as any;
             if (ne && ne.room_id) {
                 transcriptByRoom.set(ne.room_id, t);
-            }
-            const peerKey = `${t.doctor_id}_${t.patient_id}`;
-            if (!transcriptByPeer.has(peerKey)) {
-                transcriptByPeer.set(peerKey, t);
             }
         }
     }
@@ -1225,18 +1259,32 @@ export async function getConsultationHistory(
     if (calls && calls.length > 0) {
         for (const call of calls) {
             const unpacked = unpackRoomPayload(call.room_id);
-            const matchedTranscript = transcriptByRoom.get(unpacked.roomId) ||
-                transcriptByPeer.get(`${call.doctor_id}_${call.patient_id}`);
+
+            // Match transcript: exact room_id match, or same doctor+patient created within 15 minutes of the call
+            let matchedTranscript = transcriptByRoom.get(unpacked.roomId);
+            if (!matchedTranscript && transcripts && call.created_at) {
+                const callTime = new Date(call.created_at).getTime();
+                for (const t of transcripts) {
+                    if (t.doctor_id === call.doctor_id && t.patient_id === call.patient_id && t.created_at) {
+                        const tTime = new Date(t.created_at).getTime();
+                        if (Math.abs(callTime - tTime) <= 15 * 60 * 1000) {
+                            matchedTranscript = t;
+                            break;
+                        }
+                    }
+                }
+            }
 
             const docName = nameMap.get(call.doctor_id) || "Doctor";
             const patName = nameMap.get(call.patient_id) || unpacked.patientName || "Patient";
 
+            // Accurate duration: prioritize actual call start and end timestamps
             let duration = 0;
-            if (matchedTranscript?.duration) {
-                duration = matchedTranscript.duration;
-            } else if (call.created_at && call.ended_at) {
+            if (call.created_at && call.ended_at) {
                 const diffMs = new Date(call.ended_at).getTime() - new Date(call.created_at).getTime();
                 duration = Math.max(0, Math.round(diffMs / 1000));
+            } else if (matchedTranscript?.duration) {
+                duration = matchedTranscript.duration;
             }
 
             results.push({
@@ -1395,6 +1443,17 @@ export interface ClinicalReport {
     doctor_specialization?: string;
     doctor_reg_number?: string;
     duration?: number;
+    translation_metadata?: {
+        is_translated: boolean;
+        target_language?: string;
+        language_name?: string;
+        translated_language?: string;
+        translated_at?: string;
+        provider?: string;
+        translation_provider?: string;
+        original_language?: string;
+    };
+    section_headers?: Record<string, string>;
 }
 
 /**
@@ -1473,6 +1532,15 @@ export async function approveClinicalReport(payload: {
     document_title?: string;
     document_id?: string;
     encounter_type?: string;
+    translation_metadata?: {
+        is_translated: boolean;
+        original_language: string;
+        translated_language: string;
+        language_name: string;
+        translated_at: string;
+        translation_provider?: string;
+        disclaimer?: string;
+    };
 }): Promise<{ success: boolean; reportId?: string; error?: string }> {
     try {
         const res = await fetch("http://localhost:8000/consultations/approve-report", {
@@ -1582,3 +1650,145 @@ export async function getClinicalReports(
         return [];
     }
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// MULTILINGUAL & TRANSLATION SERVICES
+// ─────────────────────────────────────────────────────────────────────────────
+
+export interface LanguageOption {
+    code: string;
+    label: string;
+    native: string;
+    bcp47: string;
+}
+
+export const SUPPORTED_MULTILINGUAL_LANGUAGES: LanguageOption[] = [
+    { code: "en", label: "English", native: "English", bcp47: "en-IN" },
+    { code: "hi", label: "Hindi", native: "हिन्दी", bcp47: "hi-IN" },
+    { code: "mr", label: "Marathi", native: "मराठी", bcp47: "mr-IN" },
+    { code: "ta", label: "Tamil", native: "தமிழ்", bcp47: "ta-IN" },
+    { code: "te", label: "Telugu", native: "తెలుగు", bcp47: "te-IN" },
+    { code: "bn", label: "Bengali", native: "বাংলা", bcp47: "bn-IN" },
+    { code: "gu", label: "Gujarati", native: "ગુજરાતી", bcp47: "gu-IN" },
+    { code: "kn", label: "Kannada", native: "ಕನ್ನಡ", bcp47: "kn-IN" },
+    { code: "ml", label: "Malayalam", native: "മലയാളം", bcp47: "ml-IN" },
+    { code: "pa", label: "Punjabi", native: "ਪੰਜਾਬੀ", bcp47: "pa-IN" },
+];
+
+const BACKEND_API_BASE = "http://localhost:8000";
+
+export async function translateText(
+    text: string,
+    targetLanguage: string,
+    sourceLanguage = "en"
+): Promise<string> {
+    if (!text || !text.trim() || targetLanguage === sourceLanguage) {
+        return text;
+    }
+    const res = await fetch(`${BACKEND_API_BASE}/multilingual/translate`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+            text,
+            target_language: targetLanguage,
+            source_language: sourceLanguage,
+        }),
+    });
+    if (!res.ok) {
+        throw new Error(`Translation failed (${res.status}): ${await res.text()}`);
+    }
+    const data = await res.json();
+    return data.translated_text || text;
+}
+
+export async function translateTranscript(
+    transcript: string,
+    targetLanguage: string,
+    sourceId?: string,
+    sourceLanguage = "en"
+): Promise<string> {
+    if (!transcript || !transcript.trim() || targetLanguage === "en") {
+        return transcript;
+    }
+    const res = await fetch(`${BACKEND_API_BASE}/multilingual/translate-transcript`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+            transcript,
+            target_language: targetLanguage,
+            source_language: sourceLanguage,
+            source_id: sourceId,
+        }),
+    });
+    if (!res.ok) {
+        throw new Error(`Transcript translation failed (${res.status}): ${await res.text()}`);
+    }
+    const data = await res.json();
+    return data.translated_transcript || transcript;
+}
+
+export async function translateClinicalReport(
+    report: ClinicalReport,
+    targetLanguage: string,
+    reportId?: string,
+    role = "patient"
+): Promise<ClinicalReport> {
+    if (!report || targetLanguage === "en") {
+        return report;
+    }
+    const res = await fetch(`${BACKEND_API_BASE}/multilingual/translate-report`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+            report,
+            target_language: targetLanguage,
+            source_language: "en",
+            report_id: reportId,
+            role,
+        }),
+    });
+    if (!res.ok) {
+        throw new Error(`Report translation failed (${res.status}): ${await res.text()}`);
+    }
+    const data = await res.json();
+    return data.translated_report || report;
+}
+
+export async function askMedicalChatbot(
+    message: string,
+    language = "en",
+    conversationHistory?: any[],
+    patientId?: string
+): Promise<{ reply: string; language: string; is_emergency: boolean; matched_topics: string[]; has_patient_context?: boolean }> {
+    const res = await fetch(`${BACKEND_API_BASE}/consultations/chatbot`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+            message,
+            language,
+            conversation_history: conversationHistory,
+            patient_id: patientId,
+        }),
+    });
+    if (!res.ok) {
+        throw new Error(`Chatbot service error: ${await res.text()}`);
+    }
+    return res.json();
+}
+
+export async function fetchSpeechAudio(text: string, languageCode = "hi-IN"): Promise<string> {
+    const res = await fetch(`${BACKEND_API_BASE}/multilingual/tts`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+            text,
+            language_code: languageCode,
+        }),
+    });
+    if (!res.ok) {
+        throw new Error("Speech synthesis failed");
+    }
+    const blob = await res.blob();
+    return URL.createObjectURL(blob);
+}
+

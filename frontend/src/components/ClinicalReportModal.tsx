@@ -11,7 +11,10 @@ import {
     type PastMedicalHistory,
     type VitalSigns,
     approveClinicalReport,
+    translateClinicalReport,
+    SUPPORTED_MULTILINGUAL_LANGUAGES,
 } from "@/lib/consultationService";
+import { useGnaniVoice } from "@/hooks/useGnaniVoice";
 import PrintableEMRDocument, { openPrintableEMRWindow } from "./PrintableEMRDocument";
 
 interface ClinicalReportModalProps {
@@ -62,9 +65,15 @@ export default function ClinicalReportModal({
         },
     });
 
+    // Multilingual Report Translation State
+    const [reportLang, setReportLang] = useState<string>("en");
+    const [isTranslatingReport, setIsTranslatingReport] = useState(false);
+    const [translatedReportCache, setTranslatedReportCache] = useState<Record<string, ClinicalReport>>({});
+    const [transReportError, setTransReportError] = useState<string | null>(null);
+
     const isApproved = report.status === "approved";
-    // Patients cannot edit. Doctors can edit drafts.
-    const isEditable = isDoctor && !isApproved;
+    // Patients cannot edit. Doctors can edit drafts in source English mode.
+    const isEditable = isDoctor && !isApproved && reportLang === "en";
 
     const [activeTab, setActiveTab] = useState<"preview" | "summary" | "hpi_history" | "soap" | "symptoms" | "icd" | "treatment">("preview");
     const [isSaving, setIsSaving] = useState(false);
@@ -118,6 +127,88 @@ export default function ClinicalReportModal({
         report.physical_examination ||
             "Visual Telehealth Examination: Patient is alert and oriented x3. Communicating fluently without respiratory distress or facial asymmetry. Hands-on physical examination not performed due to telemedicine format."
     );
+
+    const handleReportLangChange = async (targetLang: string) => {
+        setReportLang(targetLang);
+        setTransReportError(null);
+        if (targetLang === "en") return;
+
+        if (translatedReportCache[targetLang]) {
+            return;
+        }
+
+        setIsTranslatingReport(true);
+        try {
+            const currentDocToTranslate: ClinicalReport = {
+                ...report,
+                summary,
+                chief_complaint: chiefComplaint,
+                history_of_present_illness: hpi,
+                soap,
+                symptoms,
+                diagnosis_suggestions: diagnoses,
+                differential_diagnoses: differentialDiagnoses,
+                icd_10_codes: icdCodes,
+                treatment_plan: treatmentPlan,
+                doctor_notes: doctorNotes,
+            };
+            const translated = await translateClinicalReport(
+                currentDocToTranslate,
+                targetLang,
+                report.id || report.document_id,
+                currentUserRole
+            );
+            setTranslatedReportCache((prev) => ({
+                ...prev,
+                [targetLang]: translated,
+            }));
+        } catch (err: unknown) {
+            const msg = err instanceof Error ? err.message : "Report translation failed";
+            setTransReportError(msg);
+        } finally {
+            setIsTranslatingReport(false);
+        }
+    };
+
+    // Doctor Voice Dictation State (Gnani Prisma STT)
+    const [activeDictationField, setActiveDictationField] = useState<string | null>(null);
+    const [dictationLang, setDictationLang] = useState<string>("en-IN");
+
+    const {
+        isListening: isDictating,
+        interimText: dictationInterim,
+        error: dictationError,
+        startListening: startDictating,
+        stopListening: stopDictating,
+    } = useGnaniVoice({
+        defaultLanguage: dictationLang,
+        onTranscript: (recognizedText) => {
+            if (!activeDictationField) return;
+            if (activeDictationField === "chief_complaint") {
+                setChiefComplaint((prev) => (prev ? `${prev} ${recognizedText}` : recognizedText));
+            } else if (activeDictationField === "hpi") {
+                setHpi((prev) => (prev ? `${prev} ${recognizedText}` : recognizedText));
+            } else if (activeDictationField === "soap_subjective") {
+                setSoap((prev) => ({ ...prev, subjective: prev.subjective ? `${prev.subjective} ${recognizedText}` : recognizedText }));
+            } else if (activeDictationField === "soap_assessment") {
+                setSoap((prev) => ({ ...prev, assessment: prev.assessment ? `${prev.assessment} ${recognizedText}` : recognizedText }));
+            } else if (activeDictationField === "soap_plan") {
+                setSoap((prev) => ({ ...prev, plan: prev.plan ? `${prev.plan} ${recognizedText}` : recognizedText }));
+            } else if (activeDictationField === "doctor_notes") {
+                setDoctorNotes((prev) => (prev ? `${prev} ${recognizedText}` : recognizedText));
+            }
+        },
+    });
+
+    const toggleDictation = (fieldName: string) => {
+        if (isDictating && activeDictationField === fieldName) {
+            stopDictating();
+            setActiveDictationField(null);
+        } else {
+            setActiveDictationField(fieldName);
+            startDictating(dictationLang);
+        }
+    };
 
     // Helpers for symptoms
     const handleAddSymptom = () => {
@@ -247,10 +338,15 @@ export default function ClinicalReportModal({
         }
     };
 
+    const activeDisplayReport: ClinicalReport =
+        reportLang !== "en" && translatedReportCache[reportLang]
+            ? translatedReportCache[reportLang]
+            : currentActiveReport;
+
     // Dedicated Complete EMR PDF Export
     const handleExportPDF = () => {
         openPrintableEMRWindow(
-            currentActiveReport,
+            activeDisplayReport,
             effectivePatientName,
             effectiveDoctorName,
             report.duration ? `${Math.round(report.duration / 60)} minutes` : "10 minutes"
@@ -357,21 +453,153 @@ export default function ClinicalReportModal({
                             )}
                         </p>
                     </div>
-                    <button
-                        onClick={onClose}
+
+                    <div style={{ display: "flex", alignItems: "center", gap: "12px", flexWrap: "wrap" }}>
+                        {/* EMR Translation Language Selector */}
+                        <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+                            <label htmlFor="modal-emr-lang" style={{ fontSize: "0.8rem", color: "var(--d-text-muted)", fontWeight: 500 }}>
+                                EMR Language:
+                            </label>
+                            <select
+                                id="modal-emr-lang"
+                                value={reportLang}
+                                onChange={(e) => handleReportLangChange(e.target.value)}
+                                style={{
+                                    padding: "5px 10px",
+                                    borderRadius: "var(--d-radius-sm)",
+                                    border: "1px solid var(--d-border)",
+                                    background: "var(--d-surface)",
+                                    color: "var(--d-text)",
+                                    fontSize: "0.82rem",
+                                    fontWeight: 600,
+                                    cursor: "pointer",
+                                }}
+                            >
+                                <option value="en">English (Original Record)</option>
+                                {SUPPORTED_MULTILINGUAL_LANGUAGES.filter((l) => l.code !== "en").map((l) => (
+                                    <option key={l.code} value={l.code}>
+                                        {l.native} ({l.label})
+                                    </option>
+                                ))}
+                            </select>
+                        </div>
+
+                        {/* Dictation Language (For Doctors in editing mode) */}
+                        {isEditable && (
+                            <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+                                <label htmlFor="modal-dictate-lang" style={{ fontSize: "0.8rem", color: "var(--d-text-muted)", fontWeight: 500 }}>
+                                    Dictation:
+                                </label>
+                                <select
+                                    id="modal-dictate-lang"
+                                    value={dictationLang}
+                                    onChange={(e) => setDictationLang(e.target.value)}
+                                    style={{
+                                        padding: "5px 8px",
+                                        borderRadius: "var(--d-radius-sm)",
+                                        border: "1px solid var(--d-border)",
+                                        background: "var(--d-surface)",
+                                        color: "var(--d-text)",
+                                        fontSize: "0.8rem",
+                                        cursor: "pointer",
+                                    }}
+                                >
+                                    <option value="en-IN">English (India)</option>
+                                    <option value="hi-IN">हिन्दी (Hindi)</option>
+                                    <option value="mr-IN">मराठी (Marathi)</option>
+                                </select>
+                            </div>
+                        )}
+
+                        <button
+                            onClick={onClose}
+                            style={{
+                                background: "none",
+                                border: "none",
+                                fontSize: "1.5rem",
+                                color: "var(--d-text-muted)",
+                                cursor: "pointer",
+                                padding: "4px 8px",
+                                lineHeight: 1,
+                            }}
+                        >
+                            ×
+                        </button>
+                    </div>
+                </div>
+
+                {/* Translation progress banner */}
+                {isTranslatingReport && (
+                    <div
                         style={{
-                            background: "none",
-                            border: "none",
-                            fontSize: "1.5rem",
-                            color: "var(--d-text-muted)",
-                            cursor: "pointer",
-                            padding: "4px 8px",
-                            lineHeight: 1,
+                            padding: "8px 24px",
+                            background: "#FEF3C7",
+                            borderBottom: "1px solid #FCD34D",
+                            fontSize: "0.82rem",
+                            color: "#92400E",
+                            display: "flex",
+                            alignItems: "center",
+                            gap: "8px",
                         }}
                     >
-                        ×
-                    </button>
-                </div>
+                        <span style={{ width: "8px", height: "8px", borderRadius: "50%", background: "#F59E0B", animation: "pulse 1.2s infinite" }} />
+                        Translating clinical record into {SUPPORTED_MULTILINGUAL_LANGUAGES.find((l) => l.code === reportLang)?.label} via Gnani AI Vachana...
+                    </div>
+                )}
+
+                {transReportError && (
+                    <div
+                        style={{
+                            padding: "8px 24px",
+                            background: "#FEE2E2",
+                            borderBottom: "1px solid #FCA5A5",
+                            fontSize: "0.82rem",
+                            color: "#B91C1C",
+                        }}
+                    >
+                        ⚠️ Report translation notice: {transReportError} (Showing original English document)
+                    </div>
+                )}
+
+                {/* Voice dictation active feedback */}
+                {isDictating && (
+                    <div
+                        style={{
+                            padding: "8px 24px",
+                            background: "#EEF2FF",
+                            borderBottom: "1px solid #C7D2FE",
+                            fontSize: "0.82rem",
+                            color: "#3730A3",
+                            display: "flex",
+                            alignItems: "center",
+                            justifyContent: "space-between",
+                        }}
+                    >
+                        <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                            <span style={{ width: "8px", height: "8px", borderRadius: "50%", background: "#4F46E5", animation: "pulse 1.2s infinite" }} />
+                            <span>
+                                <strong>Voice Dictation Active on [{activeDictationField?.replace("_", " ").toUpperCase()}]:</strong>{" "}
+                                {dictationInterim || "Listening via Gnani Prisma... Speak clinical findings clearly."}
+                            </span>
+                        </div>
+                        <button
+                            type="button"
+                            onClick={() => stopDictating()}
+                            style={{
+                                padding: "2px 8px",
+                                borderRadius: "4px",
+                                background: "#DC2626",
+                                color: "#FFF",
+                                border: "none",
+                                fontSize: "0.75rem",
+                                fontWeight: 700,
+                                cursor: "pointer",
+                            }}
+                        >
+                            Stop
+                        </button>
+                    </div>
+                )}
 
                 {/* Banner alert */}
                 <div
@@ -410,8 +638,8 @@ export default function ClinicalReportModal({
                         { id: "summary", label: "Encounter & Summary" },
                         { id: "hpi_history", label: "HPI, History & Vitals" },
                         { id: "soap", label: "SOAP Notes" },
-                        { id: "symptoms", label: `Symptoms (${symptoms.length})` },
-                        { id: "icd", label: `ICD-10 & Diagnoses (${icdCodes.length})` },
+                        { id: "symptoms", label: `Symptoms (${(activeDisplayReport.symptoms || symptoms).length})` },
+                        { id: "icd", label: `ICD-10 & Diagnoses (${(activeDisplayReport.icd_10_codes || icdCodes).length})` },
                         { id: "treatment", label: "Treatment & Plan" },
                     ].map((tab) => (
                         <button
@@ -471,7 +699,7 @@ export default function ClinicalReportModal({
                             </div>
                             <div style={{ background: "#FFF", boxShadow: "0 4px 12px rgba(0,0,0,0.06)", borderRadius: "6px", border: "1px solid #E2E8F0" }}>
                                 <PrintableEMRDocument
-                                    report={currentActiveReport}
+                                    report={activeDisplayReport}
                                     patientName={effectivePatientName}
                                     doctorName={effectiveDoctorName}
                                     currentUserRole={currentUserRole}
@@ -484,10 +712,48 @@ export default function ClinicalReportModal({
                     {/* TAB: SUMMARY & ENCOUNTER */}
                     {activeTab === "summary" && (
                         <div>
+                            {reportLang !== "en" && (
+                                <div style={{ marginBottom: "16px", padding: "10px 14px", background: "#EFF6FF", border: "1px solid #93C5FD", borderRadius: "6px", fontSize: "0.82rem", color: "#1E40AF", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                                    <span>🌐 <strong>Displaying Certified Translation ({SUPPORTED_MULTILINGUAL_LANGUAGES.find((l) => l.code === reportLang)?.label || reportLang}).</strong> Clinical terms and ICD codes are legally preserved.</span>
+                                    {isDoctor && !isApproved && (
+                                        <button
+                                            type="button"
+                                            onClick={() => setReportLang("en")}
+                                            style={{ padding: "4px 8px", background: "#DBEAFE", border: "1px solid #93C5FD", borderRadius: "4px", fontSize: "0.76rem", fontWeight: 700, color: "#1E40AF", cursor: "pointer" }}
+                                        >
+                                            Switch to English to Edit
+                                        </button>
+                                    )}
+                                </div>
+                            )}
+
                             <div style={{ marginBottom: "18px" }}>
-                                <label style={{ display: "block", fontWeight: 700, marginBottom: "6px", color: "var(--d-text)" }}>
-                                    Chief Complaint
-                                </label>
+                                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "6px" }}>
+                                    <label style={{ fontWeight: 700, margin: 0, color: "var(--d-text)" }}>
+                                        Chief Complaint
+                                    </label>
+                                    {isEditable && (
+                                        <button
+                                            type="button"
+                                            onClick={() => toggleDictation("chief_complaint")}
+                                            style={{
+                                                display: "inline-flex",
+                                                alignItems: "center",
+                                                gap: "4px",
+                                                padding: "2px 8px",
+                                                borderRadius: "12px",
+                                                fontSize: "0.75rem",
+                                                fontWeight: 600,
+                                                border: "none",
+                                                background: isDictating && activeDictationField === "chief_complaint" ? "#EF4444" : "#EEF2FF",
+                                                color: isDictating && activeDictationField === "chief_complaint" ? "#FFF" : "#4F46E5",
+                                                cursor: "pointer",
+                                            }}
+                                        >
+                                            🎤 {isDictating && activeDictationField === "chief_complaint" ? "Stop Dictation" : "Voice Dictate"}
+                                        </button>
+                                    )}
+                                </div>
                                 {isEditable ? (
                                     <input
                                         type="text"
@@ -497,7 +763,7 @@ export default function ClinicalReportModal({
                                     />
                                 ) : (
                                     <div style={{ padding: "10px 14px", background: "var(--d-surface-alt, #F8FAFC)", borderRadius: "6px", border: "1px solid var(--d-border)", fontWeight: 600 }}>
-                                        {chiefComplaint || "Acute consultation"}
+                                        {activeDisplayReport.chief_complaint || chiefComplaint || "Acute consultation"}
                                     </div>
                                 )}
                             </div>
@@ -515,15 +781,38 @@ export default function ClinicalReportModal({
                                     />
                                 ) : (
                                     <div style={{ padding: "12px 14px", background: "var(--d-surface-alt, #F8FAFC)", borderRadius: "6px", border: "1px solid var(--d-border)", lineHeight: "1.5" }}>
-                                        {summary || "No summary documented."}
+                                        {activeDisplayReport.summary || summary || "No summary documented."}
                                     </div>
                                 )}
                             </div>
 
                             <div style={{ marginBottom: "18px" }}>
-                                <label style={{ display: "block", fontWeight: 700, marginBottom: "6px", color: "var(--d-text)" }}>
-                                    Attending Clinician Remarks
-                                </label>
+                                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "6px" }}>
+                                    <label style={{ fontWeight: 700, margin: 0, color: "var(--d-text)" }}>
+                                        Attending Clinician Remarks
+                                    </label>
+                                    {isEditable && (
+                                        <button
+                                            type="button"
+                                            onClick={() => toggleDictation("doctor_notes")}
+                                            style={{
+                                                display: "inline-flex",
+                                                alignItems: "center",
+                                                gap: "4px",
+                                                padding: "2px 8px",
+                                                borderRadius: "12px",
+                                                fontSize: "0.75rem",
+                                                fontWeight: 600,
+                                                border: "none",
+                                                background: isDictating && activeDictationField === "doctor_notes" ? "#EF4444" : "#EEF2FF",
+                                                color: isDictating && activeDictationField === "doctor_notes" ? "#FFF" : "#4F46E5",
+                                                cursor: "pointer",
+                                            }}
+                                        >
+                                            🎤 {isDictating && activeDictationField === "doctor_notes" ? "Stop Dictation" : "Voice Dictate"}
+                                        </button>
+                                    )}
+                                </div>
                                 {isEditable ? (
                                     <textarea
                                         value={doctorNotes}
@@ -534,7 +823,7 @@ export default function ClinicalReportModal({
                                     />
                                 ) : (
                                     <div style={{ padding: "10px 14px", background: "var(--d-surface-alt, #F8FAFC)", borderRadius: "6px", border: "1px solid var(--d-border)" }}>
-                                        {doctorNotes || "None added."}
+                                        {activeDisplayReport.doctor_notes || doctorNotes || "None added."}
                                     </div>
                                 )}
                             </div>
@@ -544,10 +833,48 @@ export default function ClinicalReportModal({
                     {/* TAB: HPI, HISTORY & VITALS */}
                     {activeTab === "hpi_history" && (
                         <div style={{ display: "flex", flexDirection: "column", gap: "18px" }}>
+                            {reportLang !== "en" && (
+                                <div style={{ padding: "10px 14px", background: "#EFF6FF", border: "1px solid #93C5FD", borderRadius: "6px", fontSize: "0.82rem", color: "#1E40AF", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                                    <span>🌐 <strong>Displaying Certified Translation ({SUPPORTED_MULTILINGUAL_LANGUAGES.find((l) => l.code === reportLang)?.label || reportLang}).</strong></span>
+                                    {isDoctor && !isApproved && (
+                                        <button
+                                            type="button"
+                                            onClick={() => setReportLang("en")}
+                                            style={{ padding: "4px 8px", background: "#DBEAFE", border: "1px solid #93C5FD", borderRadius: "4px", fontSize: "0.76rem", fontWeight: 700, color: "#1E40AF", cursor: "pointer" }}
+                                        >
+                                            Switch to English to Edit
+                                        </button>
+                                    )}
+                                </div>
+                            )}
+
                             <div>
-                                <label style={{ display: "block", fontWeight: 700, marginBottom: "6px", color: "var(--d-text)" }}>
-                                    History of Present Illness (HPI)
-                                </label>
+                                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "6px" }}>
+                                    <label style={{ fontWeight: 700, margin: 0, color: "var(--d-text)" }}>
+                                        History of Present Illness (HPI)
+                                    </label>
+                                    {isEditable && (
+                                        <button
+                                            type="button"
+                                            onClick={() => toggleDictation("hpi")}
+                                            style={{
+                                                display: "inline-flex",
+                                                alignItems: "center",
+                                                gap: "4px",
+                                                padding: "2px 8px",
+                                                borderRadius: "12px",
+                                                fontSize: "0.75rem",
+                                                fontWeight: 600,
+                                                border: "none",
+                                                background: isDictating && activeDictationField === "hpi" ? "#EF4444" : "#EEF2FF",
+                                                color: isDictating && activeDictationField === "hpi" ? "#FFF" : "#4F46E5",
+                                                cursor: "pointer",
+                                            }}
+                                        >
+                                            🎤 {isDictating && activeDictationField === "hpi" ? "Stop Dictation" : "Voice Dictate"}
+                                        </button>
+                                    )}
+                                </div>
                                 {isEditable ? (
                                     <textarea
                                         value={hpi}
@@ -557,7 +884,7 @@ export default function ClinicalReportModal({
                                     />
                                 ) : (
                                     <div style={{ padding: "12px 14px", background: "#F8FAFC", borderRadius: "6px", border: "1px solid #E2E8F0", lineHeight: "1.5" }}>
-                                        {hpi}
+                                        {activeDisplayReport.history_of_present_illness || activeDisplayReport.soap?.subjective || hpi}
                                     </div>
                                 )}
                             </div>
@@ -575,7 +902,7 @@ export default function ClinicalReportModal({
                                     />
                                 ) : (
                                     <div style={{ padding: "10px 14px", background: "#F8FAFC", borderRadius: "6px", border: "1px solid #E2E8F0" }}>
-                                        {physicalExam}
+                                        {activeDisplayReport.physical_examination || physicalExam}
                                     </div>
                                 )}
                             </div>
@@ -595,7 +922,7 @@ export default function ClinicalReportModal({
                                                 style={{ width: "100%", padding: "6px 10px", borderRadius: "6px", border: "1px solid #CBD5E1", fontSize: "0.85rem" }}
                                             />
                                         ) : (
-                                            <div style={{ fontWeight: 600 }}>{vitalSigns.temperature || "Not measured"}</div>
+                                            <div style={{ fontWeight: 600 }}>{(activeDisplayReport.vital_signs || vitalSigns).temperature || "Not measured"}</div>
                                         )}
                                     </div>
                                     <div>
@@ -608,7 +935,7 @@ export default function ClinicalReportModal({
                                                 style={{ width: "100%", padding: "6px 10px", borderRadius: "6px", border: "1px solid #CBD5E1", fontSize: "0.85rem" }}
                                             />
                                         ) : (
-                                            <div style={{ fontWeight: 600 }}>{vitalSigns.observations || "Alert and responsive"}</div>
+                                            <div style={{ fontWeight: 600 }}>{(activeDisplayReport.vital_signs || vitalSigns).observations || "Alert and responsive"}</div>
                                         )}
                                     </div>
                                 </div>
@@ -619,9 +946,45 @@ export default function ClinicalReportModal({
                     {/* TAB: SOAP NOTES */}
                     {activeTab === "soap" && (
                         <div style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
+                            {reportLang !== "en" && (
+                                <div style={{ padding: "10px 14px", background: "#EFF6FF", border: "1px solid #93C5FD", borderRadius: "6px", fontSize: "0.82rem", color: "#1E40AF", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                                    <span>🌐 <strong>Displaying Certified Translation ({SUPPORTED_MULTILINGUAL_LANGUAGES.find((l) => l.code === reportLang)?.label || reportLang}).</strong></span>
+                                    {isDoctor && !isApproved && (
+                                        <button
+                                            type="button"
+                                            onClick={() => setReportLang("en")}
+                                            style={{ padding: "4px 8px", background: "#DBEAFE", border: "1px solid #93C5FD", borderRadius: "4px", fontSize: "0.76rem", fontWeight: 700, color: "#1E40AF", cursor: "pointer" }}
+                                        >
+                                            Switch to English to Edit
+                                        </button>
+                                    )}
+                                </div>
+                            )}
+
                             <div style={{ border: "1px solid #BFDBFE", borderRadius: "8px", overflow: "hidden" }}>
-                                <div style={{ background: "#EFF6FF", padding: "8px 14px", fontWeight: 700, color: "#1E40AF", fontSize: "0.84rem" }}>
-                                    S — Subjective (Patient narrative, chief complaint, symptom onset)
+                                <div style={{ background: "#EFF6FF", padding: "8px 14px", fontWeight: 700, color: "#1E40AF", fontSize: "0.84rem", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                                    <span>S — Subjective (Patient narrative, chief complaint, symptom onset)</span>
+                                    {isEditable && (
+                                        <button
+                                            type="button"
+                                            onClick={() => toggleDictation("soap_subjective")}
+                                            style={{
+                                                display: "inline-flex",
+                                                alignItems: "center",
+                                                gap: "4px",
+                                                padding: "2px 8px",
+                                                borderRadius: "12px",
+                                                fontSize: "0.75rem",
+                                                fontWeight: 600,
+                                                border: "none",
+                                                background: isDictating && activeDictationField === "soap_subjective" ? "#EF4444" : "#DBEAFE",
+                                                color: isDictating && activeDictationField === "soap_subjective" ? "#FFF" : "#1E40AF",
+                                                cursor: "pointer",
+                                            }}
+                                        >
+                                            🎤 {isDictating && activeDictationField === "soap_subjective" ? "Stop" : "Dictate"}
+                                        </button>
+                                    )}
                                 </div>
                                 <div style={{ padding: "10px 14px" }}>
                                     {isEditable ? (
@@ -632,7 +995,7 @@ export default function ClinicalReportModal({
                                             style={{ width: "100%", border: "none", outline: "none", fontSize: "0.88rem", fontFamily: "inherit" }}
                                         />
                                     ) : (
-                                        <div style={{ whiteSpace: "pre-wrap", lineHeight: "1.5" }}>{soap.subjective}</div>
+                                        <div style={{ whiteSpace: "pre-wrap", lineHeight: "1.5" }}>{activeDisplayReport.soap?.subjective || soap.subjective}</div>
                                     )}
                                 </div>
                             </div>
@@ -650,14 +1013,35 @@ export default function ClinicalReportModal({
                                             style={{ width: "100%", border: "none", outline: "none", fontSize: "0.88rem", fontFamily: "inherit" }}
                                         />
                                     ) : (
-                                        <div style={{ whiteSpace: "pre-wrap", lineHeight: "1.5" }}>{soap.objective}</div>
+                                        <div style={{ whiteSpace: "pre-wrap", lineHeight: "1.5" }}>{activeDisplayReport.soap?.objective || soap.objective}</div>
                                     )}
                                 </div>
                             </div>
 
                             <div style={{ border: "1px solid #DDD6FE", borderRadius: "8px", overflow: "hidden" }}>
-                                <div style={{ background: "#F5F3FF", padding: "8px 14px", fontWeight: 700, color: "#6D28D9", fontSize: "0.84rem" }}>
-                                    A — Assessment (Clinical evaluation, working diagnosis, differentials)
+                                <div style={{ background: "#F5F3FF", padding: "8px 14px", fontWeight: 700, color: "#6D28D9", fontSize: "0.84rem", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                                    <span>A — Assessment (Clinical evaluation, working diagnosis, differentials)</span>
+                                    {isEditable && (
+                                        <button
+                                            type="button"
+                                            onClick={() => toggleDictation("soap_assessment")}
+                                            style={{
+                                                display: "inline-flex",
+                                                alignItems: "center",
+                                                gap: "4px",
+                                                padding: "2px 8px",
+                                                borderRadius: "12px",
+                                                fontSize: "0.75rem",
+                                                fontWeight: 600,
+                                                border: "none",
+                                                background: isDictating && activeDictationField === "soap_assessment" ? "#EF4444" : "#EDE9FE",
+                                                color: isDictating && activeDictationField === "soap_assessment" ? "#FFF" : "#6D28D9",
+                                                cursor: "pointer",
+                                            }}
+                                        >
+                                            🎤 {isDictating && activeDictationField === "soap_assessment" ? "Stop" : "Dictate"}
+                                        </button>
+                                    )}
                                 </div>
                                 <div style={{ padding: "10px 14px" }}>
                                     {isEditable ? (
@@ -668,14 +1052,35 @@ export default function ClinicalReportModal({
                                             style={{ width: "100%", border: "none", outline: "none", fontSize: "0.88rem", fontFamily: "inherit" }}
                                         />
                                     ) : (
-                                        <div style={{ whiteSpace: "pre-wrap", lineHeight: "1.5" }}>{soap.assessment}</div>
+                                        <div style={{ whiteSpace: "pre-wrap", lineHeight: "1.5" }}>{activeDisplayReport.soap?.assessment || soap.assessment}</div>
                                     )}
                                 </div>
                             </div>
 
                             <div style={{ border: "1px solid #BBF7D0", borderRadius: "8px", overflow: "hidden" }}>
-                                <div style={{ background: "#F0FDF4", padding: "8px 14px", fontWeight: 700, color: "#166534", fontSize: "0.84rem" }}>
-                                    P — Plan (Therapeutic actions, medications, investigations, follow-up)
+                                <div style={{ background: "#F0FDF4", padding: "8px 14px", fontWeight: 700, color: "#166534", fontSize: "0.84rem", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                                    <span>P — Plan (Therapeutic actions, medications, investigations, follow-up)</span>
+                                    {isEditable && (
+                                        <button
+                                            type="button"
+                                            onClick={() => toggleDictation("soap_plan")}
+                                            style={{
+                                                display: "inline-flex",
+                                                alignItems: "center",
+                                                gap: "4px",
+                                                padding: "2px 8px",
+                                                borderRadius: "12px",
+                                                fontSize: "0.75rem",
+                                                fontWeight: 600,
+                                                border: "none",
+                                                background: isDictating && activeDictationField === "soap_plan" ? "#EF4444" : "#DCFCE7",
+                                                color: isDictating && activeDictationField === "soap_plan" ? "#FFF" : "#166534",
+                                                cursor: "pointer",
+                                            }}
+                                        >
+                                            🎤 {isDictating && activeDictationField === "soap_plan" ? "Stop" : "Dictate"}
+                                        </button>
+                                    )}
                                 </div>
                                 <div style={{ padding: "10px 14px" }}>
                                     {isEditable ? (
@@ -686,7 +1091,7 @@ export default function ClinicalReportModal({
                                             style={{ width: "100%", border: "none", outline: "none", fontSize: "0.88rem", fontFamily: "inherit" }}
                                         />
                                     ) : (
-                                        <div style={{ whiteSpace: "pre-wrap", lineHeight: "1.5" }}>{soap.plan}</div>
+                                        <div style={{ whiteSpace: "pre-wrap", lineHeight: "1.5" }}>{activeDisplayReport.soap?.plan || soap.plan}</div>
                                     )}
                                 </div>
                             </div>
@@ -696,6 +1101,21 @@ export default function ClinicalReportModal({
                     {/* TAB: SYMPTOMS */}
                     {activeTab === "symptoms" && (
                         <div>
+                            {reportLang !== "en" && (
+                                <div style={{ marginBottom: "16px", padding: "10px 14px", background: "#EFF6FF", border: "1px solid #93C5FD", borderRadius: "6px", fontSize: "0.82rem", color: "#1E40AF", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                                    <span>🌐 <strong>Displaying Certified Translation ({SUPPORTED_MULTILINGUAL_LANGUAGES.find((l) => l.code === reportLang)?.label || reportLang}).</strong></span>
+                                    {isDoctor && !isApproved && (
+                                        <button
+                                            type="button"
+                                            onClick={() => setReportLang("en")}
+                                            style={{ padding: "4px 8px", background: "#DBEAFE", border: "1px solid #93C5FD", borderRadius: "4px", fontSize: "0.76rem", fontWeight: 700, color: "#1E40AF", cursor: "pointer" }}
+                                        >
+                                            Switch to English to Edit
+                                        </button>
+                                    )}
+                                </div>
+                            )}
+
                             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "12px" }}>
                                 <div style={{ fontSize: "0.88rem", color: "var(--d-text-muted)" }}>
                                     Extracted patient symptoms with severity and duration
@@ -721,7 +1141,7 @@ export default function ClinicalReportModal({
                                     </tr>
                                 </thead>
                                 <tbody>
-                                    {symptoms.map((item, idx) => (
+                                    {((reportLang !== "en" && activeDisplayReport.symptoms && activeDisplayReport.symptoms.length > 0 ? activeDisplayReport.symptoms : symptoms)).map((item, idx) => (
                                         <tr key={idx} style={{ borderBottom: "1px solid var(--d-border)" }}>
                                             <td style={{ padding: "8px 12px" }}>
                                                 {isEditable ? (
@@ -770,13 +1190,28 @@ export default function ClinicalReportModal({
                     {/* TAB: ICD-10 & DIAGNOSES */}
                     {activeTab === "icd" && (
                         <div>
+                            {reportLang !== "en" && (
+                                <div style={{ marginBottom: "16px", padding: "10px 14px", background: "#EFF6FF", border: "1px solid #93C5FD", borderRadius: "6px", fontSize: "0.82rem", color: "#1E40AF", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                                    <span>🌐 <strong>Displaying Certified Translation ({SUPPORTED_MULTILINGUAL_LANGUAGES.find((l) => l.code === reportLang)?.label || reportLang}).</strong></span>
+                                    {isDoctor && !isApproved && (
+                                        <button
+                                            type="button"
+                                            onClick={() => setReportLang("en")}
+                                            style={{ padding: "4px 8px", background: "#DBEAFE", border: "1px solid #93C5FD", borderRadius: "4px", fontSize: "0.76rem", fontWeight: 700, color: "#1E40AF", cursor: "pointer" }}
+                                        >
+                                            Switch to English to Edit
+                                        </button>
+                                    )}
+                                </div>
+                            )}
+
                             {/* Differential Diagnoses */}
                             <div style={{ marginBottom: "22px" }}>
                                 <h4 style={{ margin: "0 0 8px 0", fontSize: "0.95rem", fontWeight: 700, color: "var(--d-text)" }}>
                                     Clinical Diagnostic Impressions &amp; Differentials
                                 </h4>
                                 <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
-                                    {differentialDiagnoses.map((d, idx) => (
+                                    {((reportLang !== "en" && activeDisplayReport.differential_diagnoses && activeDisplayReport.differential_diagnoses.length > 0 ? activeDisplayReport.differential_diagnoses : differentialDiagnoses)).map((d, idx) => (
                                         <div key={idx} style={{ padding: "10px 14px", borderRadius: "6px", background: "#F8FAFC", border: "1px solid var(--d-border)", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                                             <div>
                                                 <strong style={{ fontSize: "0.92rem", color: "#1E3A8A" }}>{d.diagnosis}</strong>
@@ -816,7 +1251,7 @@ export default function ClinicalReportModal({
                                         </tr>
                                     </thead>
                                     <tbody>
-                                        {icdCodes.map((item, idx) => (
+                                        {((reportLang !== "en" && activeDisplayReport.icd_10_codes && activeDisplayReport.icd_10_codes.length > 0 ? activeDisplayReport.icd_10_codes : icdCodes)).map((item, idx) => (
                                             <tr key={idx} style={{ borderBottom: "1px solid var(--d-border)" }}>
                                                 <td style={{ padding: "8px 12px", fontFamily: "monospace", fontWeight: 700, color: "#1E40AF" }}>{item.code}</td>
                                                 <td style={{ padding: "8px 12px", fontWeight: 600 }}>{item.description}</td>
@@ -856,6 +1291,21 @@ export default function ClinicalReportModal({
                     {/* TAB: TREATMENT PLAN */}
                     {activeTab === "treatment" && (
                         <div style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
+                            {reportLang !== "en" && (
+                                <div style={{ padding: "10px 14px", background: "#EFF6FF", border: "1px solid #93C5FD", borderRadius: "6px", fontSize: "0.82rem", color: "#1E40AF", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                                    <span>🌐 <strong>Displaying Certified Translation ({SUPPORTED_MULTILINGUAL_LANGUAGES.find((l) => l.code === reportLang)?.label || reportLang}).</strong></span>
+                                    {isDoctor && !isApproved && (
+                                        <button
+                                            type="button"
+                                            onClick={() => setReportLang("en")}
+                                            style={{ padding: "4px 8px", background: "#DBEAFE", border: "1px solid #93C5FD", borderRadius: "4px", fontSize: "0.76rem", fontWeight: 700, color: "#1E40AF", cursor: "pointer" }}
+                                        >
+                                            Switch to English to Edit
+                                        </button>
+                                    )}
+                                </div>
+                            )}
+
                             <div>
                                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "8px" }}>
                                     <label style={{ fontWeight: 700, color: "var(--d-text)" }}>
@@ -868,13 +1318,13 @@ export default function ClinicalReportModal({
                                     )}
                                 </div>
                                 <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
-                                    {(treatmentPlan.medications || []).map((med, idx) => (
+                                    {(((reportLang !== "en" && activeDisplayReport.treatment_plan?.medications) ? activeDisplayReport.treatment_plan.medications : treatmentPlan.medications) || []).map((med, idx) => (
                                         <div key={idx} style={{ display: "flex", alignItems: "center", gap: "8px" }}>
                                             {isEditable ? (
                                                 <>
                                                     <input
                                                         type="text"
-                                                        value={med}
+                                                        value={typeof med === "string" ? med : (med as any).medication || ""}
                                                         onChange={(e) => handleUpdateMedication(idx, e.target.value)}
                                                         style={{ flex: 1, padding: "6px 10px", borderRadius: "6px", border: "1px solid var(--d-border)" }}
                                                     />
@@ -884,7 +1334,7 @@ export default function ClinicalReportModal({
                                                 </>
                                             ) : (
                                                 <div style={{ padding: "8px 12px", background: "#F1F5F9", borderRadius: "6px", width: "100%", fontWeight: 600 }}>
-                                                    💊 {med}
+                                                    💊 {typeof med === "string" ? med : `${(med as any).medication} — ${(med as any).instructions || (med as any).dosage || ""}`}
                                                 </div>
                                             )}
                                         </div>
@@ -904,7 +1354,7 @@ export default function ClinicalReportModal({
                                         style={{ width: "100%", padding: "8px 12px", borderRadius: "6px", border: "1px solid var(--d-border)" }}
                                     />
                                 ) : (
-                                    <p style={{ margin: 0 }}>{treatmentPlan.follow_up || "Follow up in 3 to 5 days."}</p>
+                                    <p style={{ margin: 0 }}>{(reportLang !== "en" && activeDisplayReport.treatment_plan?.follow_up) ? activeDisplayReport.treatment_plan.follow_up : (treatmentPlan.follow_up || "Follow up in 3 to 5 days.")}</p>
                                 )}
                             </div>
 
@@ -919,7 +1369,7 @@ export default function ClinicalReportModal({
                                     />
                                 ) : (
                                     <p style={{ margin: 0, fontSize: "0.85rem" }}>
-                                        {treatmentPlan.emergency_warnings || "Seek immediate emergency medical attention if severe sudden symptoms occur."}
+                                        {(reportLang !== "en" && (activeDisplayReport.treatment_plan?.emergency_warnings || activeDisplayReport.treatment_plan?.emergency_warning)) ? (activeDisplayReport.treatment_plan.emergency_warnings || activeDisplayReport.treatment_plan.emergency_warning) : (treatmentPlan.emergency_warnings || "Seek immediate emergency medical attention if severe sudden symptoms occur.")}
                                     </p>
                                 )}
                             </div>
@@ -1021,9 +1471,9 @@ export default function ClinicalReportModal({
             {/* Standalone background container for native browser print (Ctrl+P) */}
             <div className="print-container" style={{ display: "none" }}>
                 <PrintableEMRDocument
-                    report={currentActiveReport}
-                    patientName={patientName}
-                    doctorName={doctorName}
+                    report={activeDisplayReport}
+                    patientName={effectivePatientName}
+                    doctorName={effectiveDoctorName}
                     currentUserRole={currentUserRole}
                     encounterDuration={report.duration ? `${Math.round(report.duration / 60)} minutes` : "10 minutes"}
                 />

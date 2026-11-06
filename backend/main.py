@@ -3,19 +3,50 @@ import asyncio
 import json
 from datetime import datetime, timezone
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, Response
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, EmailStr
 from typing import Optional, List, Dict, Any
 import websockets
 
 try:
-    from clinical_ai import generate_clinical_report_ai
+    from clinical_ai import generate_clinical_report_ai, generate_multilingual_chatbot_reply
 except ImportError:
     try:
-        from backend.clinical_ai import generate_clinical_report_ai
+        from backend.clinical_ai import generate_clinical_report_ai, generate_multilingual_chatbot_reply
     except ImportError:
         generate_clinical_report_ai = None
+        generate_multilingual_chatbot_reply = None
+
+try:
+    from services.multilingual_service import (
+        SUPPORTED_LANGUAGES as MULTILINGUAL_LANGUAGES,
+        normalize_lang_code,
+        detect_script_language,
+        translate_text_gnani,
+        synthesize_speech_gnani,
+        translate_transcript_lines,
+        translate_clinical_report,
+    )
+except ImportError:
+    try:
+        from backend.services.multilingual_service import (
+            SUPPORTED_LANGUAGES as MULTILINGUAL_LANGUAGES,
+            normalize_lang_code,
+            detect_script_language,
+            translate_text_gnani,
+            synthesize_speech_gnani,
+            translate_transcript_lines,
+            translate_clinical_report,
+        )
+    except ImportError:
+        MULTILINGUAL_LANGUAGES = {}
+        normalize_lang_code = lambda c: c
+        detect_script_language = lambda t: "en"
+        translate_text_gnani = None
+        synthesize_speech_gnani = None
+        translate_transcript_lines = None
+        translate_clinical_report = None
 
 try:
     from supabase import create_client, Client
@@ -24,6 +55,10 @@ except ImportError:
     Client = None
 
 load_dotenv()
+# Also check backend directory if running from repo root
+backend_env_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
+if os.path.exists(backend_env_path):
+    load_dotenv(backend_env_path, override=True)
 
 # ---------- Supabase client ----------
 SUPABASE_URL: str = os.getenv("SUPABASE_URL", "")
@@ -165,14 +200,24 @@ def save_consultation_transcript(payload: SaveTranscriptRequest):
             "updated_at": now_iso
         }).execute()
 
-        # Update call status in video_calls
+        # Update call status in video_calls, or insert if voice-only consultation
         try:
-            supabase.table("video_calls").update({
+            vc_res = supabase.table("video_calls").update({
                 "status": "ended",
                 "ended_at": now_iso
             }).or_(f"room_id.eq.{payload.room_id},room_id.like.%{payload.room_id}%").execute()
-        except Exception:
-            pass
+
+            if not vc_res.data:
+                supabase.table("video_calls").insert({
+                    "doctor_id": payload.doctor_id,
+                    "patient_id": payload.patient_id,
+                    "room_id": payload.room_id,
+                    "status": "ended",
+                    "created_at": now_iso,
+                    "ended_at": now_iso
+                }).execute()
+        except Exception as e:
+            print(f"Error ensuring video_calls record: {e}")
 
         inserted_id = res.data[0]["id"] if (res and res.data) else None
         return {"status": "created", "id": inserted_id}
@@ -585,6 +630,272 @@ def get_consultation_reports(
     except Exception as e:
         print(f"Error fetching clinical reports: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# ---------- Multilingual Schemas ----------
+class TranslateTextRequest(BaseModel):
+    text: str
+    target_language: str
+    source_language: Optional[str] = "en"
+
+
+class DetectLanguageRequest(BaseModel):
+    text: str
+
+
+class TranslateTranscriptRequest(BaseModel):
+    transcript: str
+    target_language: str
+    source_language: Optional[str] = "en"
+    source_id: Optional[str] = None
+
+
+class TranslateReportRequest(BaseModel):
+    report: Dict[str, Any]
+    target_language: str
+    source_language: Optional[str] = "en"
+    report_id: Optional[str] = None
+    role: Optional[str] = "patient"
+    user_id: Optional[str] = None
+
+
+class TTSRequest(BaseModel):
+    text: str
+    language_code: Optional[str] = "hi-IN"
+    voice: Optional[str] = None
+
+
+class ChatbotRequest(BaseModel):
+    message: str
+    language: Optional[str] = "en"
+    conversation_history: Optional[List[Dict[str, str]]] = None
+    patient_id: Optional[str] = None
+
+
+# ---------- Multilingual Endpoints ----------
+@app.get("/multilingual/supported-languages")
+def get_supported_languages():
+    """Returns the verified list of supported Indian languages."""
+    return {
+        "supported_languages": [
+            {"code": code, "name": meta["name"], "native": meta["native"], "bcp47": meta["bcp47"]}
+            for code, meta in MULTILINGUAL_LANGUAGES.items()
+        ]
+    }
+
+
+@app.post("/multilingual/detect-language")
+def detect_language_endpoint(payload: DetectLanguageRequest):
+    """Detects primary language script from text."""
+    detected = detect_script_language(payload.text)
+    meta = MULTILINGUAL_LANGUAGES.get(detected, {"name": "English", "native": "English", "bcp47": "en-IN"})
+    return {
+        "language": detected,
+        "name": meta["name"],
+        "native": meta["native"],
+        "bcp47": meta["bcp47"],
+    }
+
+
+@app.post("/multilingual/translate")
+async def translate_text_endpoint(payload: TranslateTextRequest):
+    """Translates arbitrary clinical/dialogue text using Gnani AI Vachana NMT."""
+    if not translate_text_gnani:
+        raise HTTPException(status_code=500, detail="Translation service not initialized.")
+    try:
+        translated = await translate_text_gnani(
+            text=payload.text,
+            target_language=payload.target_language,
+            source_language=payload.source_language or "en",
+        )
+        return {
+            "original_text": payload.text,
+            "translated_text": translated,
+            "target_language": payload.target_language,
+            "source_language": payload.source_language or "en",
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Translation error: {str(e)}")
+
+
+@app.post("/multilingual/translate-transcript")
+async def translate_transcript_endpoint(payload: TranslateTranscriptRequest):
+    """
+    Translates an entire consultation speech transcript line-by-line,
+    preserving speaker attribution, timestamps, and order.
+    Checks and populates DB cache in clinical_translations if source_id provided.
+    """
+    if not translate_transcript_lines:
+        raise HTTPException(status_code=500, detail="Translation service not initialized.")
+
+    tgt = normalize_lang_code(payload.target_language)
+
+    # 1. Check database cache if source_id provided
+    if payload.source_id and supabase:
+        try:
+            cached = (
+                supabase.table("clinical_translations")
+                .select("translated_content")
+                .eq("source_type", "transcript")
+                .eq("source_id", str(payload.source_id))
+                .eq("target_language", tgt)
+                .maybeSingle()
+                .execute()
+            )
+            if cached and cached.data:
+                return {
+                    "translated_transcript": cached.data["translated_content"].get("transcript"),
+                    "target_language": tgt,
+                    "cached": True,
+                }
+        except Exception:
+            pass
+
+    # 2. Translate lines
+    try:
+        translated = await translate_transcript_lines(
+            transcript=payload.transcript,
+            target_language=tgt,
+            source_language=payload.source_language or "en",
+        )
+
+        # 3. Store in DB cache if source_id provided
+        if payload.source_id and supabase:
+            try:
+                supabase.table("clinical_translations").upsert({
+                    "source_type": "transcript",
+                    "source_id": str(payload.source_id),
+                    "original_language": payload.source_language or "en",
+                    "target_language": tgt,
+                    "translated_content": {"transcript": translated},
+                    "provider": "gnani_vachana",
+                    "updated_at": datetime.now(timezone.utc).isoformat(),
+                }, on_conflict="source_type,source_id,target_language").execute()
+            except Exception as ce:
+                print(f"[Translate Transcript] Cache upsert warning: {ce}")
+
+        return {
+            "translated_transcript": translated,
+            "target_language": tgt,
+            "cached": False,
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Transcript translation failed: {str(e)}")
+
+
+@app.post("/multilingual/translate-report")
+async def translate_report_endpoint(payload: TranslateReportRequest):
+    """
+    Translates a full structured clinical EMR report into the target Indian language.
+    Strict medical safety:
+      - Patients can ONLY access translations of approved reports.
+      - Preserves numerical values, ICD-10 codes, and medication dosages.
+      - Never overwrites the original report; attaches translation metadata.
+    """
+    if not translate_clinical_report:
+        raise HTTPException(status_code=500, detail="Report translation service not initialized.")
+
+    report = payload.report
+    if not report:
+        raise HTTPException(status_code=400, detail="Report payload is required.")
+
+    # Access control: Patients cannot access draft report translations
+    if payload.role == "patient" and report.get("status") != "approved":
+        raise HTTPException(status_code=403, detail="Patients may only access translations of approved clinical reports.")
+
+    tgt = normalize_lang_code(payload.target_language)
+    report_id = payload.report_id or report.get("id") or report.get("document_id")
+
+    # 1. Check DB cache (only if it contains complete translation with section_headers)
+    if report_id and supabase:
+        try:
+            cached = (
+                supabase.table("clinical_translations")
+                .select("translated_content")
+                .eq("source_type", "clinical_report")
+                .eq("source_id", str(report_id))
+                .eq("target_language", tgt)
+                .maybeSingle()
+                .execute()
+            )
+            if cached and cached.data:
+                content = cached.data.get("translated_content")
+                if isinstance(content, dict) and content.get("section_headers"):
+                    return {
+                        "translated_report": content,
+                        "target_language": tgt,
+                        "cached": True,
+                    }
+        except Exception:
+            pass
+
+    # 2. Perform clinical report translation
+    try:
+        translated_doc = await translate_clinical_report(
+            report=report,
+            target_language=tgt,
+            source_language=payload.source_language or "en",
+        )
+
+        # 3. Store in DB cache
+        if report_id and supabase:
+            try:
+                supabase.table("clinical_translations").upsert({
+                    "source_type": "clinical_report",
+                    "source_id": str(report_id),
+                    "original_language": payload.source_language or "en",
+                    "target_language": tgt,
+                    "translated_content": translated_doc,
+                    "provider": "gnani_vachana",
+                    "updated_at": datetime.now(timezone.utc).isoformat(),
+                }, on_conflict="source_type,source_id,target_language").execute()
+            except Exception as ce:
+                print(f"[Translate Report] Cache upsert warning: {ce}")
+
+        return {
+            "translated_report": translated_doc,
+            "target_language": tgt,
+            "cached": False,
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Clinical report translation failed: {str(e)}")
+
+
+@app.post("/multilingual/tts")
+async def tts_speech_endpoint(payload: TTSRequest):
+    """Synthesizes Indian language speech from text using Gnani Timbre TTS."""
+    if not synthesize_speech_gnani:
+        raise HTTPException(status_code=500, detail="TTS service not initialized.")
+    try:
+        wav_bytes = await synthesize_speech_gnani(
+            text=payload.text,
+            language_code=payload.language_code or "hi-IN",
+            voice=payload.voice,
+        )
+        return Response(content=wav_bytes, media_type="audio/wav")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"TTS error: {str(e)}")
+
+
+@app.post("/consultations/chatbot")
+async def clinical_chatbot_endpoint(payload: ChatbotRequest):
+    """
+    Multilingual AI Medical Chatbot endpoint.
+    Retrieves grounded clinical concepts from ICD-10 knowledge base,
+    enforces emergency red-flag screening, and returns answers in the user's language.
+    """
+    if not generate_multilingual_chatbot_reply:
+        raise HTTPException(status_code=500, detail="Chatbot AI engine not initialized.")
+    try:
+        result = await generate_multilingual_chatbot_reply(
+            user_message=payload.message,
+            target_language=payload.language or "en",
+            conversation_history=payload.conversation_history,
+            patient_id=payload.patient_id,
+        )
+        return result
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Chatbot error: {str(e)}")
 
 
 @app.websocket("/ws/transcribe")

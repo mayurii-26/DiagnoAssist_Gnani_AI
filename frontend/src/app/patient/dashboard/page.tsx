@@ -3,6 +3,7 @@
 import { useEffect, useState, useCallback } from "react";
 import Link from "next/link";
 import { useAuth } from "@/components/AuthProvider";
+import MultilingualChatbot from "@/components/MultilingualChatbot";
 import {
     getConsultationHistory,
     type CompletedConsultation,
@@ -219,6 +220,9 @@ export default function PatientDashboardPage() {
                     </div>
                 </div>
             </div>
+
+            {/* Multilingual AI Clinical Assistant */}
+            <MultilingualChatbot />
         </div>
     );
 }

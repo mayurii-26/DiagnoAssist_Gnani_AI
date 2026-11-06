@@ -5,6 +5,8 @@ import { useSearchParams } from "next/navigation";
 import { useAuth } from "@/components/AuthProvider";
 import VideoPanel from "@/components/VideoPanel";
 import VoicePanel from "@/components/VoicePanel";
+import MultilingualChatbot from "@/components/MultilingualChatbot";
+import { useGnaniVoice } from "@/hooks/useGnaniVoice";
 import {
     getRegisteredDoctors,
     getPatientActiveRequest,
@@ -12,6 +14,7 @@ import {
     cancelConsultationRequest,
     subscribeToPatientUpdates,
     subscribeToPresenceUpdates,
+    SUPPORTED_MULTILINGUAL_LANGUAGES,
     type DoctorProfile,
     type ConsultationRequest,
     type RequestStatus,
@@ -34,6 +37,21 @@ function PatientConsultationContent() {
     const [urgency, setUrgency] = useState<"routine" | "urgent">("routine");
     const [submitting, setSubmitting] = useState(false);
     const [cancelling, setCancelling] = useState(false);
+
+    // Multilingual Voice Input for Symptoms (Gnani Prisma STT)
+    const [intakeLang, setIntakeLang] = useState("hi-IN");
+    const {
+        isListening: isIntakeListening,
+        interimText: intakeInterim,
+        error: intakeError,
+        startListening: startIntakeVoice,
+        stopListening: stopIntakeVoice,
+    } = useGnaniVoice({
+        defaultLanguage: intakeLang,
+        onTranscript: (spoken) => {
+            setReason((prev) => (prev ? `${prev} ${spoken}` : spoken));
+        },
+    });
 
     const patientName = user?.user_metadata?.full_name || user?.email?.split("@")[0] || "Patient";
 
@@ -581,109 +599,337 @@ function PatientConsultationContent() {
                         left: 0,
                         right: 0,
                         bottom: 0,
-                        backgroundColor: "rgba(15, 23, 42, 0.6)",
-                        backdropFilter: "blur(4px)",
+                        backgroundColor: "rgba(15, 23, 42, 0.72)",
+                        backdropFilter: "blur(8px)",
+                        WebkitBackdropFilter: "blur(8px)",
                         display: "flex",
                         alignItems: "center",
                         justifyContent: "center",
                         zIndex: 1000,
                         padding: "20px",
                     }}
+                    onClick={(e) => {
+                        if (e.target === e.currentTarget && !submitting) {
+                            setSelectedDoctor(null);
+                        }
+                    }}
                 >
                     <div
-                        className="card"
                         style={{
-                            maxWidth: "520px",
+                            maxWidth: "540px",
                             width: "100%",
-                            background: "var(--d-surface)",
-                            borderRadius: "var(--d-radius-lg)",
-                            boxShadow: "var(--d-shadow-lg)",
+                            background: "#FFFFFF",
+                            borderRadius: "16px",
+                            boxShadow: "0 25px 50px -12px rgba(0, 0, 0, 0.3), 0 0 0 1px #E2E8F0",
                             overflow: "hidden",
+                            color: "#0F172A",
                         }}
                     >
+                        {/* Modal Header */}
                         <div
                             style={{
-                                padding: "20px 24px",
-                                borderBottom: "1px solid var(--d-border)",
+                                padding: "18px 24px",
+                                borderBottom: "1px solid #E2E8F0",
                                 display: "flex",
                                 justifyContent: "space-between",
                                 alignItems: "center",
+                                background: "#FFFFFF",
                             }}
                         >
-                            <h2 style={{ margin: 0, fontSize: "1.25rem", fontWeight: 700 }}>Request Consultation</h2>
+                            <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+                                <div
+                                    style={{
+                                        width: "36px",
+                                        height: "36px",
+                                        borderRadius: "10px",
+                                        background: "#E8F6F8",
+                                        color: "#0F7B8A",
+                                        display: "flex",
+                                        alignItems: "center",
+                                        justifyContent: "center",
+                                        fontSize: "1.1rem",
+                                    }}
+                                >
+                                    🩺
+                                </div>
+                                <div>
+                                    <h2 style={{ margin: 0, fontSize: "1.2rem", fontWeight: 700, color: "#0F172A" }}>
+                                        Request Consultation
+                                    </h2>
+                                    <p style={{ margin: "2px 0 0", fontSize: "0.78rem", color: "#64748B" }}>
+                                        Connect with your chosen physician
+                                    </p>
+                                </div>
+                            </div>
                             <button
+                                type="button"
                                 onClick={() => setSelectedDoctor(null)}
-                                style={{ background: "none", border: "none", fontSize: "1.3rem", cursor: "pointer", color: "var(--d-text-muted)" }}
+                                style={{
+                                    width: "32px",
+                                    height: "32px",
+                                    borderRadius: "50%",
+                                    background: "#F1F5F9",
+                                    border: "none",
+                                    fontSize: "1.2rem",
+                                    cursor: "pointer",
+                                    color: "#64748B",
+                                    display: "flex",
+                                    alignItems: "center",
+                                    justifyContent: "center",
+                                    lineHeight: 1,
+                                }}
                             >
                                 ×
                             </button>
                         </div>
 
-                        <form onSubmit={handleSendRequest} style={{ padding: "24px" }}>
-                            {/* Doctor Summary Header */}
+                        <form onSubmit={handleSendRequest} style={{ padding: "22px 24px" }}>
+                            {/* Selected Doctor Card */}
                             <div
                                 style={{
-                                    padding: "12px 16px",
-                                    background: "var(--d-primary-light)",
-                                    borderRadius: "var(--d-radius-sm)",
-                                    marginBottom: "18px",
+                                    padding: "14px 16px",
+                                    background: "linear-gradient(135deg, #F0FDF4 0%, #E8F6F8 100%)",
+                                    border: "1px solid #A7F3D0",
+                                    borderRadius: "12px",
+                                    marginBottom: "20px",
+                                    display: "flex",
+                                    alignItems: "center",
+                                    justifyContent: "space-between",
+                                    gap: "12px",
                                 }}
                             >
-                                <div style={{ fontWeight: 700, color: "var(--d-primary)", fontSize: "0.95rem" }}>
-                                    {selectedDoctor.name.startsWith("Dr") ? selectedDoctor.name : `Dr. ${selectedDoctor.name}`}
+                                <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
+                                    <div
+                                        style={{
+                                            width: "44px",
+                                            height: "44px",
+                                            borderRadius: "50%",
+                                            background: "#0F7B8A",
+                                            color: "#FFFFFF",
+                                            display: "flex",
+                                            alignItems: "center",
+                                            justifyContent: "center",
+                                            fontWeight: 700,
+                                            fontSize: "1rem",
+                                            flexShrink: 0,
+                                        }}
+                                    >
+                                        {selectedDoctor.name.replace(/^Dr\.?\s*/i, "").charAt(0).toUpperCase()}
+                                    </div>
+                                    <div>
+                                        <div style={{ fontWeight: 700, color: "#0F172A", fontSize: "0.98rem" }}>
+                                            {selectedDoctor.name.startsWith("Dr") ? selectedDoctor.name : `Dr. ${selectedDoctor.name}`}
+                                        </div>
+                                        <div style={{ fontSize: "0.82rem", color: "#475569", marginTop: "2px" }}>
+                                            {selectedDoctor.specialization} • {selectedDoctor.experience}
+                                        </div>
+                                    </div>
                                 </div>
-                                <div style={{ fontSize: "0.82rem", color: "var(--d-text)" }}>
-                                    {selectedDoctor.specialization} • {selectedDoctor.experience}
-                                </div>
+
+                                <span
+                                    style={{
+                                        fontSize: "0.75rem",
+                                        fontWeight: 600,
+                                        padding: "4px 10px",
+                                        borderRadius: "20px",
+                                        background: "#DCFCE7",
+                                        color: "#15803D",
+                                        border: "1px solid #86EFAC",
+                                        whiteSpace: "nowrap",
+                                    }}
+                                >
+                                    ● Available Now
+                                </span>
                             </div>
 
-                            {/* Reason for Consultation */}
-                            <div style={{ marginBottom: "18px" }}>
-                                <label
-                                    htmlFor="consultation-reason"
-                                    style={{ display: "block", fontSize: "0.88rem", fontWeight: 600, marginBottom: "6px" }}
+                            {/* Reason for Consultation with Voice Dictation */}
+                            <div style={{ marginBottom: "20px" }}>
+                                <div
+                                    style={{
+                                        display: "flex",
+                                        justifyContent: "space-between",
+                                        alignItems: "center",
+                                        marginBottom: "8px",
+                                        flexWrap: "wrap",
+                                        gap: "8px",
+                                    }}
                                 >
-                                    Chief Complaint / Symptoms *
-                                </label>
+                                    <label
+                                        htmlFor="consultation-reason"
+                                        style={{ fontSize: "0.88rem", fontWeight: 600, color: "#0F172A", margin: 0 }}
+                                    >
+                                        Chief Complaint / Symptoms <span style={{ color: "#EF4444" }}>*</span>
+                                    </label>
+
+                                    {/* Voice Input Toolbar */}
+                                    <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                                        <select
+                                            value={intakeLang}
+                                            onChange={(e) => {
+                                                const newLang = e.target.value;
+                                                setIntakeLang(newLang);
+                                                if (isIntakeListening) {
+                                                    stopIntakeVoice();
+                                                    startIntakeVoice(newLang);
+                                                }
+                                            }}
+                                            style={{
+                                                fontSize: "0.82rem",
+                                                padding: "6px 10px",
+                                                borderRadius: "8px",
+                                                border: "1px solid #CBD5E1",
+                                                background: "#FFFFFF",
+                                                color: "#0F172A",
+                                                cursor: "pointer",
+                                                outline: "none",
+                                            }}
+                                            title="Choose spoken language for speech recognition"
+                                        >
+                                            {SUPPORTED_MULTILINGUAL_LANGUAGES.map((l) => (
+                                                <option key={l.code} value={l.bcp47}>
+                                                    {l.native} ({l.label})
+                                                </option>
+                                            ))}
+                                        </select>
+
+                                        <button
+                                            type="button"
+                                            onClick={() => {
+                                                if (isIntakeListening) {
+                                                    stopIntakeVoice();
+                                                } else {
+                                                    startIntakeVoice(intakeLang);
+                                                }
+                                            }}
+                                            style={{
+                                                display: "inline-flex",
+                                                alignItems: "center",
+                                                gap: "6px",
+                                                padding: "6px 14px",
+                                                borderRadius: "20px",
+                                                fontSize: "0.82rem",
+                                                fontWeight: 600,
+                                                border: "none",
+                                                background: isIntakeListening ? "#DC2626" : "#0F7B8A",
+                                                color: "#FFFFFF",
+                                                cursor: "pointer",
+                                                boxShadow: isIntakeListening ? "0 0 12px rgba(220, 38, 38, 0.6)" : "0 2px 6px rgba(15, 123, 138, 0.25)",
+                                                transition: "all 0.2s ease",
+                                            }}
+                                        >
+                                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                                                <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z" />
+                                                <path d="M19 10v2a7 7 0 0 1-14 0v-2" />
+                                                <line x1="12" y1="19" x2="12" y2="23" />
+                                                <line x1="8" y1="23" x2="16" y2="23" />
+                                            </svg>
+                                            {isIntakeListening ? "Listening (Tap to Stop)" : "Voice Speak"}
+                                        </button>
+                                    </div>
+                                </div>
+
                                 <textarea
                                     id="consultation-reason"
                                     rows={4}
                                     value={reason}
                                     onChange={(e) => setReason(e.target.value)}
-                                    placeholder="Describe your symptoms (e.g. throbbing headache for 3 days, mild fever, nausea)..."
+                                    placeholder="Type your medical concerns or click 'Voice Speak' to dictate your symptoms in your preferred Indian language..."
                                     required
                                     style={{
                                         width: "100%",
-                                        padding: "10px 14px",
-                                        borderRadius: "var(--d-radius-sm)",
-                                        border: "1px solid var(--d-border)",
-                                        background: "var(--d-surface)",
-                                        color: "var(--d-text)",
-                                        fontFamily: "var(--font)",
-                                        fontSize: "0.9rem",
+                                        padding: "12px 14px",
+                                        borderRadius: "10px",
+                                        border: `1.5px solid ${isIntakeListening ? "#0F7B8A" : "#CBD5E1"}`,
+                                        background: "#FFFFFF",
+                                        color: "#0F172A",
+                                        fontFamily: "inherit",
+                                        fontSize: "0.92rem",
+                                        lineHeight: "1.5",
                                         resize: "vertical",
+                                        outline: "none",
+                                        boxShadow: isIntakeListening ? "0 0 0 3px rgba(15, 123, 138, 0.15)" : "none",
                                     }}
                                 />
-                            </div>
 
-                            {/* Urgency Level */}
-                            <div style={{ marginBottom: "24px" }}>
-                                <label style={{ display: "block", fontSize: "0.88rem", fontWeight: 600, marginBottom: "8px" }}>
-                                    Consultation Priority
-                                </label>
-                                <div style={{ display: "flex", gap: "12px" }}>
-                                    <label
+                                {/* Voice status feedback */}
+                                {isIntakeListening && (
+                                    <div
                                         style={{
-                                            flex: 1,
-                                            padding: "10px 14px",
-                                            borderRadius: "var(--d-radius-sm)",
-                                            border: `1px solid ${urgency === "routine" ? "var(--d-primary)" : "var(--d-border)"}`,
-                                            background: urgency === "routine" ? "var(--d-primary-light)" : "transparent",
-                                            cursor: "pointer",
+                                            marginTop: "8px",
+                                            padding: "8px 12px",
+                                            background: "#FEF3C7",
+                                            border: "1px solid #FCD34D",
+                                            borderRadius: "8px",
+                                            fontSize: "0.82rem",
+                                            color: "#92400E",
                                             display: "flex",
                                             alignItems: "center",
                                             gap: "8px",
-                                            fontSize: "0.88rem",
+                                        }}
+                                    >
+                                        <span
+                                            style={{
+                                                width: "8px",
+                                                height: "8px",
+                                                borderRadius: "50%",
+                                                background: "#DC2626",
+                                                display: "inline-block",
+                                                animation: "pulse 1.2s infinite",
+                                            }}
+                                        />
+                                        <span>
+                                            🎙️ <strong>Live Speech:</strong> {intakeInterim || "Listening... Speak your symptoms clearly."}
+                                        </span>
+                                    </div>
+                                )}
+
+                                {intakeError && (
+                                    <div style={{ marginTop: "8px", fontSize: "0.82rem", color: "#DC2626" }}>
+                                        ⚠️ {intakeError}
+                                    </div>
+                                )}
+
+                                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: "6px" }}>
+                                    <span style={{ fontSize: "0.78rem", color: "#64748B" }}>
+                                        Recognized speech is editable. Review and adjust before sending.
+                                    </span>
+                                    {reason && (
+                                        <button
+                                            type="button"
+                                            onClick={() => setReason("")}
+                                            style={{
+                                                background: "none",
+                                                border: "none",
+                                                fontSize: "0.78rem",
+                                                color: "#64748B",
+                                                textDecoration: "underline",
+                                                cursor: "pointer",
+                                                padding: 0,
+                                            }}
+                                        >
+                                            Clear text
+                                        </button>
+                                    )}
+                                </div>
+                            </div>
+
+                            {/* Consultation Priority */}
+                            <div style={{ marginBottom: "24px" }}>
+                                <label style={{ display: "block", fontSize: "0.88rem", fontWeight: 600, color: "#0F172A", marginBottom: "8px" }}>
+                                    Consultation Priority
+                                </label>
+                                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "12px" }}>
+                                    <label
+                                        style={{
+                                            padding: "12px 14px",
+                                            borderRadius: "10px",
+                                            border: `1.5px solid ${urgency === "routine" ? "#0F7B8A" : "#E2E8F0"}`,
+                                            background: urgency === "routine" ? "#E8F6F8" : "#FFFFFF",
+                                            cursor: "pointer",
+                                            display: "flex",
+                                            alignItems: "flex-start",
+                                            gap: "10px",
+                                            transition: "all 0.15s ease",
                                         }}
                                     >
                                         <input
@@ -692,21 +938,29 @@ function PatientConsultationContent() {
                                             value="routine"
                                             checked={urgency === "routine"}
                                             onChange={() => setUrgency("routine")}
+                                            style={{ marginTop: "3px" }}
                                         />
-                                        <span>Standard Routine</span>
+                                        <div>
+                                            <div style={{ fontWeight: 600, fontSize: "0.88rem", color: urgency === "routine" ? "#0F7B8A" : "#0F172A" }}>
+                                                Standard Routine
+                                            </div>
+                                            <div style={{ fontSize: "0.75rem", color: "#64748B", marginTop: "1px" }}>
+                                                Standard medical review
+                                            </div>
+                                        </div>
                                     </label>
+
                                     <label
                                         style={{
-                                            flex: 1,
-                                            padding: "10px 14px",
-                                            borderRadius: "var(--d-radius-sm)",
-                                            border: `1px solid ${urgency === "urgent" ? "#EF4444" : "var(--d-border)"}`,
-                                            background: urgency === "urgent" ? "#FEF2F2" : "transparent",
+                                            padding: "12px 14px",
+                                            borderRadius: "10px",
+                                            border: `1.5px solid ${urgency === "urgent" ? "#EF4444" : "#E2E8F0"}`,
+                                            background: urgency === "urgent" ? "#FEF2F2" : "#FFFFFF",
                                             cursor: "pointer",
                                             display: "flex",
-                                            alignItems: "center",
-                                            gap: "8px",
-                                            fontSize: "0.88rem",
+                                            alignItems: "flex-start",
+                                            gap: "10px",
+                                            transition: "all 0.15s ease",
                                         }}
                                     >
                                         <input
@@ -715,27 +969,35 @@ function PatientConsultationContent() {
                                             value="urgent"
                                             checked={urgency === "urgent"}
                                             onChange={() => setUrgency("urgent")}
+                                            style={{ marginTop: "3px" }}
                                         />
-                                        <span style={{ color: urgency === "urgent" ? "#DC2626" : "inherit", fontWeight: 600 }}>
-                                            High Priority
-                                        </span>
+                                        <div>
+                                            <div style={{ fontWeight: 600, fontSize: "0.88rem", color: urgency === "urgent" ? "#DC2626" : "#0F172A" }}>
+                                                High Priority
+                                            </div>
+                                            <div style={{ fontSize: "0.75rem", color: "#64748B", marginTop: "1px" }}>
+                                                Urgent medical triage
+                                            </div>
+                                        </div>
                                     </label>
                                 </div>
                             </div>
 
                             {/* Actions */}
-                            <div style={{ display: "flex", justifyContent: "flex-end", gap: "10px" }}>
+                            <div style={{ display: "flex", justifyContent: "flex-end", gap: "12px", paddingTop: "8px", borderTop: "1px solid #F1F5F9" }}>
                                 <button
                                     type="button"
                                     onClick={() => setSelectedDoctor(null)}
                                     disabled={submitting}
                                     style={{
                                         padding: "10px 18px",
-                                        borderRadius: "var(--d-radius-sm)",
-                                        border: "1px solid var(--d-border)",
-                                        background: "transparent",
+                                        borderRadius: "8px",
+                                        border: "1px solid #CBD5E1",
+                                        background: "#FFFFFF",
+                                        color: "#475569",
                                         cursor: "pointer",
                                         fontSize: "0.88rem",
+                                        fontWeight: 600,
                                     }}
                                 >
                                     Cancel
@@ -744,14 +1006,16 @@ function PatientConsultationContent() {
                                     type="submit"
                                     disabled={submitting}
                                     style={{
-                                        padding: "10px 22px",
-                                        borderRadius: "var(--d-radius-sm)",
+                                        padding: "10px 24px",
+                                        borderRadius: "8px",
                                         border: "none",
-                                        background: "var(--d-primary)",
-                                        color: "#FFF",
+                                        background: "#0F7B8A",
+                                        color: "#FFFFFF",
                                         fontWeight: 600,
                                         fontSize: "0.88rem",
                                         cursor: submitting ? "not-allowed" : "pointer",
+                                        boxShadow: "0 4px 12px rgba(15, 123, 138, 0.35)",
+                                        opacity: submitting ? 0.7 : 1,
                                     }}
                                 >
                                     {submitting ? "Sending Request..." : "Send Request Now"}
@@ -761,6 +1025,9 @@ function PatientConsultationContent() {
                     </div>
                 </div>
             )}
+
+            {/* Multilingual AI Clinical Assistant */}
+            <MultilingualChatbot />
         </div>
     );
 }
